@@ -11,4 +11,5 @@ The guide is introduced in the infrastructure foundation PR and becomes availabl
 
 Foundation only. Application code, cloud infrastructure and end-to-end delivery are not deployed.
 All changes after repository initialization go through feature branches and pull requests.
-These private repositories use GitHub Free; review enforcement requires the planned Team upgrade.
+These repositories are public on GitHub Free. Protected `main` requires a CODEOWNER
+approval, passing CI checks and resolved conversations; administrators follow the same rules.
