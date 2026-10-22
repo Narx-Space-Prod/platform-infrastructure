@@ -14,8 +14,8 @@ concurrency:
 
 jobs:
   workflows:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@a40f96defaf04c3570034fb9ab4ceef25ef7065a
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@e94e5e70af3edaf124cd7fbe86ec76f36160fdbf
   terraform:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@a40f96defaf04c3570034fb9ab4ceef25ef7065a
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@e94e5e70af3edaf124cd7fbe86ec76f36160fdbf
     with:
       working-directory: bootstrap
