@@ -15,10 +15,30 @@ deployments, release automation and AWS infrastructure remain pending.
 The order outbox, publisher and receipt worker now run against local ElasticMQ;
 real AWS SQS integration and queue alerting remain pending. No AWS resources have been provisioned.
 
-The organisation uses GitHub Free and the repositories are private by choice. PRs and
-CODEOWNERS record the intended review process, but GitHub cannot enforce protected
-branches and required reviews for these private repositories until the organisation
-upgrades to GitHub Team. Do not describe the current review policy as enforced.
+The organisation uses GitHub Free and all six repositories are public. GitHub now
+enforces `main` branch protection: PRs, one CODEOWNER approval, the repository's CI
+checks, an up-to-date branch, resolved conversations and linear history are required.
+New commits dismiss stale approvals, the latest push needs approval from someone
+other than its pusher, and administrators follow these rules too. Force pushes and
+branch deletion are blocked; no PR-approval bypass users, teams or apps are configured.
+Organisation/repository administrators can still edit the settings; this is not an
+immutable control against the organisation owner.
+
+`code-reviewers` contains only `Code-S-12` and is named in every CODEOWNERS file.
+Review approval and merge are separate actions: an authorised writer can merge only
+after all required controls pass. PR authors cannot approve their own PR. Workflow
+execution for PRs from external forks requires maintainer approval; organisation
+members' ordinary PR checks run automatically. Execution approval does not approve
+the code for merging. Default Actions tokens remain read-only and cannot approve PRs.
+
+Before the visibility change, all Git refs including closed PR heads were scanned
+with Gitleaks 8.30.1, along with 42 available Actions-run log archives and 22 build
+artifacts; no secrets were detected. Two failed workflow runs had no job logs.
+The tracked PEM is the public RDS CA bundle, and the tracked env file is only an
+example. Generated local `.env` credentials remain ignored and were not published.
+Public visibility also exposes Git history and Actions logs: never commit secrets,
+real customer records or Terraform state. Future changes still need secret scanning;
+this review is not a guarantee that later commits are safe.
 
 ## Repository map and ownership
 
@@ -424,9 +444,9 @@ release records identify their repository and digest.
 
 ## Remaining implementation milestones
 
-1. Foundation PRs are merged. Upgrade GitHub Team before enforcing private-repo
-   branch protection. Required reviewers, no self-review, no force pushes, resolved
-   conversations, passing checks and restricted workflow changes must be verified.
+1. Foundation PRs are merged. All six repositories are public and `main` protection
+   is enforced on GitHub Free. Retain CODEOWNER reviews, required CI checks and no
+   administrator bypass. Recheck these controls after changing visibility or permissions.
 2. The application migration and local unit/integration checks are complete. Review the
    outbox/worker changes and local retry/DLQ evidence. Existing application runtimes and
    ownership remain; real payment-provider and AWS SQS integration are still pending.
@@ -442,7 +462,7 @@ release records identify their repository and digest.
 
 ## References
 
-- [GitHub private-repository protection availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+- [GitHub branch-protection availability](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 - [Terraform S3 state and native lockfile](https://developer.hashicorp.com/terraform/language/backend/s3)
 - [Terraform provider mocks](https://developer.hashicorp.com/terraform/language/tests/mocking)
 - [GitHub OIDC for AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
