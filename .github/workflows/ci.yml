@@ -9,13 +9,26 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   workflows:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@e94e5e70af3edaf124cd7fbe86ec76f36160fdbf
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@f907416baf6ffca41626f10df94f7631d86de8c0
   terraform:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@e94e5e70af3edaf124cd7fbe86ec76f36160fdbf
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@f907416baf6ffca41626f10df94f7631d86de8c0
     with:
       working-directory: bootstrap
+  registry:
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@f907416baf6ffca41626f10df94f7631d86de8c0
+    with:
+      working-directory: delivery
+  local:
+    name: Local bootstrap syntax
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: python3 -m py_compile local/bootstrap.py
