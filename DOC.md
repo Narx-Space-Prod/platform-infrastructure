@@ -137,6 +137,8 @@ The migration preserves the existing storefront, accounts, cart, admin, order hi
 Razorpay test-mode integration, refunds and INR pricing. Source provenance and licenses
 are recorded in the application READMEs. It does not import Jenkinsfiles, per-service
 Helm copies or Jenkins report-converter scripts.
+Checkout now requires authentication and delivery information. The old anonymous demo
+path that created confirmed orders without payment is removed from the migrated app.
 
 | Component | Source | Runtime port | Metrics |
 | --- | --- | --- | --- |
@@ -171,7 +173,8 @@ with Path('local/.env').open('x') as output:
     output.write(''.join(f'{key}={secrets.token_hex(32)}\n' for key in keys))
     output.write('PUBLIC_ORIGIN=http://localhost:18080\nAPP_PORT=18080\nAPP_BIND_ADDRESS=127.0.0.1\n')
 PY
-docker compose --env-file local/.env -f local/compose.yaml up --build -d --wait
+docker compose --parallel 1 --env-file local/.env -f local/compose.yaml build
+docker compose --env-file local/.env -f local/compose.yaml up --no-build -d --wait
 ```
 
 The secret-generation command refuses to overwrite an existing file. Open
@@ -196,6 +199,18 @@ Register your own customer account; there is no default admin password. An opera
 can grant that account admin access only in this local preview, using the exact email
 registered above and a reviewed SQL command inside the PostgreSQL container. Do not
 make the first registrant an administrator or add a public role-assignment endpoint.
+For a local operator, open a SQL prompt and replace the example email with the account
+you registered (there is no fixed admin account/password):
+
+```bash
+docker compose --env-file local/.env -f local/compose.yaml exec postgres psql -U commerce -d commerce
+```
+
+```sql
+UPDATE customers SET role='admin' WHERE email='your-admin@example.com';
+```
+
+Then type `\q` to exit and sign in with that account at `/admin`.
 The integration test promotes only its generated throwaway account, then exercises
 customer/admin separation, product version conflicts, order processing and refunds.
 
@@ -210,6 +225,13 @@ The test mutates its named local stack. Do not point it at a shared or productio
 database. PostgreSQL data survives ordinary `down`; carts and simulator records do
 not. Stopping and restarting the payment simulator does not constitute a provider
 recovery test and can leave its old local orders needing a fresh checkout.
+
+Migration verification: all four runtime Docker builds passed their application tests.
+The opt-in full-stack test passed against an isolated local project, including denied
+guest checkout, required delivery, customer/admin separation, INR product data, stock
+reservation, idempotent checkout, invalid payment signature rejection, payment retries,
+order isolation, product version conflicts, fulfilment and refund retries. This evidence
+does not cover the real payment provider, SQS processing, Kubernetes releases or AWS.
 
 ## Infrastructure workflow
 
