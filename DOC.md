@@ -9,9 +9,9 @@ they do not mean a company or real delivery team operates this environment.
 
 The six foundation PRs are merged and their post-merge checks passed. They introduced
 ownership, reusable workflow validation, Terraform state storage and a shared Helm chart.
-Application migration PRs now add the commerce source, container builds, application
-tests and an integrated local Docker preview. Review/merge those PRs before expecting
-the source on main. Kubernetes deployments, SQS processing, release automation and AWS
+The application repositories provide the commerce source, container builds and tests;
+the GitOps repository provides an integrated local Docker preview. Kubernetes
+deployments, SQS processing, release automation and AWS
 infrastructure remain pending. No AWS resources have been provisioned.
 
 The organisation uses GitHub Free and the repositories are private by choice. PRs and
@@ -163,7 +163,7 @@ gh repo clone Narx-Space-Prod/commerce-catalogue
 gh repo clone Narx-Space-Prod/commerce-orders
 gh repo clone Narx-Space-Prod/platform-gitops
 cd platform-gitops
-# For an unmerged migration review, check out feat/application-migration in all four repos.
+# When reviewing an unmerged change, check out the corresponding PR branches in all four repos.
 umask 077
 python3 - <<'PY'
 from pathlib import Path
