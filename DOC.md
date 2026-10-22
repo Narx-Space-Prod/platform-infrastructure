@@ -7,10 +7,12 @@ they do not mean a company or real delivery team operates this environment.
 
 ## Current status
 
-The project is in its foundation phase. The six repositories have been created. The first
-PRs introduce ownership, reusable workflow validation, Terraform state storage and a
-shared Helm chart. Application migration, release automation, local deployments and
-AWS infrastructure are not implemented yet. No AWS resources have been provisioned.
+The six foundation PRs are merged and their post-merge checks passed. They introduced
+ownership, reusable workflow validation, Terraform state storage and a shared Helm chart.
+The application repositories provide the commerce source, container builds and tests;
+the GitOps repository provides an integrated local Docker preview. Kubernetes
+deployments, SQS processing, release automation and AWS
+infrastructure remain pending. No AWS resources have been provisioned.
 
 The organisation uses GitHub Free and the repositories are private by choice. PRs and
 CODEOWNERS record the intended review process, but GitHub cannot enforce protected
@@ -22,18 +24,24 @@ upgrades to GitHub Team. Do not describe the current review policy as enforced.
 | Repository | Owning team | Boundary |
 | --- | --- | --- |
 | `commerce-frontend` | Frontend | Customer storefront and admin interface |
-| `commerce-catalogue` | Catalogue | Product data and inventory; owns its data |
-| `commerce-orders` | Orders | Checkout, payments, order history, worker and outbox |
+| `commerce-catalogue` | Catalogue | Public product read API; reads the commerce core over HTTP |
+| `commerce-orders` | Orders | Accounts, inventory, checkout, payments, orders and cart; planned worker/outbox |
 | `platform-ci` | Platform | Versioned reusable GitHub Actions workflows |
 | `platform-infrastructure` | Platform | Terraform and this project guide |
 | `platform-gitops` | Platform/release | Helm, Argo CD, environment releases and platform add-ons |
 
-Each application service builds and releases independently. The orders worker lives
-with the orders service because they share a business owner and event contracts;
-it will be a separate deployment that can scale independently. Shared CI workflows
-prevent copying whole pipelines into every repository. There is no separate cart
-repository in this design; cart ownership and migration are to be settled with the
-application implementation. Existing `Local-Narx-Space` repositories remain untouched.
+Each runtime component builds independently. The cart source is in `commerce-orders/cart`
+and produces its own Python image. The future worker will live with orders because
+they share a business owner and event contracts; it will scale independently. The
+three application repositories currently produce four runtime images. Shared CI
+workflows prevent copying whole pipelines into every repository. Existing
+`Local-Narx-Space` repositories remain untouched.
+
+The source application keeps stock reservation and order insertion atomic in the
+orders commerce core's PostgreSQL transaction. The migration deliberately retains
+that boundary. The Go catalogue is a read facade, not an independent inventory database.
+Splitting inventory into its own transactional service would require a reservation
+protocol and compensation; it is not achieved merely by making another repository.
 
 Developer: `subhankar12-spec`. Intended independent reviewer: `Code-S-12` through
 the `code-reviewers` team. Service teams receive write access to their repositories;
@@ -60,9 +68,10 @@ Evaluate NAT versus endpoint/network costs before choosing the network layout;
 private nodes require an intentional outbound connectivity design. Use the existing
 DNS provider unless a Route 53 hosted zone is needed.
 
-Database ownership stays with each service: separate databases and credentials can
-share one small RDS instance for cost control. Services must not query each other's
-tables. The number and size of databases will be confirmed during app migration.
+The commerce core owns PostgreSQL products, stock, accounts, orders and payments.
+Catalogue reads products through HTTP and cart owns Redis keys. Services do not query
+each other's databases. The core has not been decomposed into database-per-domain
+microservices; any later split must be an explicit, tested architecture change.
 
 ## Target delivery flow
 
@@ -81,7 +90,12 @@ tables. The number and size of databases will be confirmed during app migration.
    and smoke tests verify the release. Failure handling must update desired state
    so Argo does not repeatedly restore a failed release.
 
-This is the target flow, not the current implementation. GitHub-hosted runners do
+Current application CI validates workflow syntax and builds runtime images through
+their test stages. BuildKit caches avoid separate test-image builds and duplicate
+test wrappers. PRs have read-only tokens and no AWS credentials. ECR publishing,
+security scanning, signing and release promotion are still pending.
+
+The numbered release flow is the target, not the current implementation. GitHub-hosted runners do
 not directly access the local cluster. Local Argo CD pulls changes; trusted smoke
 tests will run inside the local cluster. Do not expose an unauthenticated local
 deployment endpoint or give an untrusted PR a self-hosted runner with cluster access.
@@ -116,6 +130,108 @@ Never place card data, passwords or complete customer records into queue message
 Dev/QA use ElasticMQ with separate queues. It implements a subset of SQS behaviour;
 real AWS integration checks must verify IAM, queue policies, retries and failure
 handling. Payment integration remains in sandbox mode.
+
+## Application source and local preview
+
+The migration preserves the existing storefront, accounts, cart, admin, order history,
+Razorpay test-mode integration, refunds and INR pricing. Source provenance and licenses
+are recorded in the application READMEs. It does not import Jenkinsfiles, per-service
+Helm copies or Jenkins report-converter scripts.
+Checkout now requires authentication and delivery information. The old anonymous demo
+path that created confirmed orders without payment is removed from the migrated app.
+
+| Component | Source | Runtime port | Metrics |
+| --- | --- | --- | --- |
+| Frontend | `commerce-frontend/src` and `public` | 8080 | `/metrics` |
+| Catalogue | `commerce-catalogue/*.go` | 8081 | `/metrics` |
+| Orders/core | `commerce-orders/src` | 8083 | `/actuator/prometheus` |
+| Cart | `commerce-orders/cart` | 8082 | `/metrics` |
+
+All services expose `/health/live` and `/health/ready`. Catalogue refuses to return
+the old hard-coded USD demo data if `COMMERCE_URL` is absent. Its readiness follows
+the commerce dependency; liveness does not. Production Helm values will need each
+component's real port and resources rather than the chart's generic defaults.
+
+The Docker Compose preview is a developer convenience, not the Kubernetes dev/QA
+delivery path. Clone the application repositories and `platform-gitops` as siblings:
+
+```bash
+mkdir -p narx-commerce
+cd narx-commerce
+gh repo clone Narx-Space-Prod/commerce-frontend
+gh repo clone Narx-Space-Prod/commerce-catalogue
+gh repo clone Narx-Space-Prod/commerce-orders
+gh repo clone Narx-Space-Prod/platform-gitops
+cd platform-gitops
+# When reviewing an unmerged change, check out the corresponding PR branches in all four repos.
+umask 077
+python3 - <<'PY'
+from pathlib import Path
+import secrets
+keys = ['DATABASE_PASSWORD', 'SESSION_SECRET', 'FIXTURE_PAYMENT_SECRET', 'FIXTURE_WEBHOOK_SECRET']
+with Path('local/.env').open('x') as output:
+    output.write(''.join(f'{key}={secrets.token_hex(32)}\n' for key in keys))
+    output.write('PUBLIC_ORIGIN=http://localhost:18080\nAPP_PORT=18080\nAPP_BIND_ADDRESS=127.0.0.1\n')
+PY
+docker compose --parallel 1 --env-file local/.env -f local/compose.yaml build
+docker compose --env-file local/.env -f local/compose.yaml up --no-build -d --wait
+```
+
+The secret-generation command refuses to overwrite an existing file. Open
+`http://localhost:18080`. From a different computer, forward that port over SSH:
+
+```bash
+ssh -L 18080:127.0.0.1:18080 your-linux-user@your-linux-host
+```
+
+Then use `http://localhost:18080` on the computer running the browser. For deliberate
+LAN exposure, change `APP_BIND_ADDRESS`, `APP_PORT` and `PUBLIC_ORIGIN` together in
+the local env file. `PUBLIC_ORIGIN` must exactly match the browser's scheme, host and
+port; otherwise state-changing requests correctly fail the origin check.
+
+The preview uses a local payment simulator and says so in the browser confirmation.
+It makes no Razorpay transaction. It verifies the application's signature checks,
+state changes and refund handling but does not verify the real Razorpay sandbox.
+Actual provider tests will use backend-only Razorpay test credentials in Kubernetes.
+Fixture flags and fixture keys must never appear in AWS production configuration.
+
+Register your own customer account; there is no default admin password. An operator
+can grant that account admin access only in this local preview, using the exact email
+registered above and a reviewed SQL command inside the PostgreSQL container. Do not
+make the first registrant an administrator or add a public role-assignment endpoint.
+For a local operator, open a SQL prompt and replace the example email with the account
+you registered (there is no fixed admin account/password):
+
+```bash
+docker compose --env-file local/.env -f local/compose.yaml exec postgres psql -U commerce -d commerce
+```
+
+```sql
+UPDATE customers SET role='admin' WHERE email='your-admin@example.com';
+```
+
+Then type `\q` to exit and sign in with that account at `/admin`.
+The integration test promotes only its generated throwaway account, then exercises
+customer/admin separation, product version conflicts, order processing and refunds.
+
+```bash
+NARX_LOCAL_TEST=1 NARX_COMPOSE_PROJECT=narx-commerce python3 -m unittest discover -s tests -v
+docker compose --env-file local/.env -f local/compose.yaml down
+# Only for intentionally discarding this local preview's PostgreSQL data:
+# docker compose --env-file local/.env -f local/compose.yaml down --volumes
+```
+
+The test mutates its named local stack. Do not point it at a shared or production
+database. PostgreSQL data survives ordinary `down`; carts and simulator records do
+not. Stopping and restarting the payment simulator does not constitute a provider
+recovery test and can leave its old local orders needing a fresh checkout.
+
+Migration verification: all four runtime Docker builds passed their application tests.
+The opt-in full-stack test passed against an isolated local project, including denied
+guest checkout, required delivery, customer/admin separation, INR product data, stock
+reservation, idempotent checkout, invalid payment signature rejection, payment retries,
+order isolation, product version conflicts, fulfilment and refund retries. This evidence
+does not cover the real payment provider, SQS processing, Kubernetes releases or AWS.
 
 ## Infrastructure workflow
 
@@ -199,13 +315,14 @@ release records identify their repository and digest.
 
 ## Remaining implementation milestones
 
-1. Review and merge foundation PRs; upgrade GitHub Team before enforcing private-repo
+1. Foundation PRs are merged. Upgrade GitHub Team before enforcing private-repo
    branch protection. Required reviewers, no self-review, no force pushes, resolved
    conversations, passing checks and restricted workflow changes must be verified.
-2. Inventory existing application code; preserve users/admin/order/payment behaviour;
-   settle runtime versions, cart ownership, API contracts and database migrations.
-3. Implement service tests, Dockerfiles, reusable build/scan/publish workflows and
-   the event/outbox/worker flow. Add failure and duplicate-message tests.
+2. Review the application migration: source, licenses, runtime builds, unit tests and
+   local integration checks. Existing Java 21/Spring Boot, Node 22, Go and Python 3.12
+   runtimes are retained. Cart ownership is with the orders team; catalogue is a read API.
+3. Implement image security scanning/signing/publishing and the event/outbox/worker
+   flow. Add queue failure and duplicate-message tests; do not claim messaging is implemented yet.
 4. Establish isolated local dev/QA, Argo CD, registry authentication, queue and data
    stores; verify releases through GitOps without Jenkins or direct CI cluster access.
 5. Produce a regional cost estimate and Terraform VPC/EKS/ECR/RDS/SQS/IAM modules.
