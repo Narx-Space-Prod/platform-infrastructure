@@ -11,8 +11,9 @@ The six foundation PRs are merged and their post-merge checks passed. They intro
 ownership, reusable workflow validation, Terraform state storage and a shared Helm chart.
 The application repositories provide the commerce source, container builds and tests;
 the GitOps repository provides an integrated local Docker preview. Kubernetes
-deployments, SQS processing, release automation and AWS
-infrastructure remain pending. No AWS resources have been provisioned.
+deployments, release automation and AWS infrastructure remain pending.
+The order outbox, publisher and receipt worker now run against local ElasticMQ;
+real AWS SQS integration and queue alerting remain pending. No AWS resources have been provisioned.
 
 The organisation uses GitHub Free and the repositories are private by choice. PRs and
 CODEOWNERS record the intended review process, but GitHub cannot enforce protected
@@ -25,15 +26,16 @@ upgrades to GitHub Team. Do not describe the current review policy as enforced.
 | --- | --- | --- |
 | `commerce-frontend` | Frontend | Customer storefront and admin interface |
 | `commerce-catalogue` | Catalogue | Public product read API; reads the commerce core over HTTP |
-| `commerce-orders` | Orders | Accounts, inventory, checkout, payments, orders and cart; planned worker/outbox |
+| `commerce-orders` | Orders | Accounts, inventory, checkout, payments, orders, cart, outbox and receipt worker |
 | `platform-ci` | Platform | Versioned reusable GitHub Actions workflows |
 | `platform-infrastructure` | Platform | Terraform and this project guide |
 | `platform-gitops` | Platform/release | Helm, Argo CD, environment releases and platform add-ons |
 
 Each runtime component builds independently. The cart source is in `commerce-orders/cart`
-and produces its own Python image. The future worker will live with orders because
-they share a business owner and event contracts; it will scale independently. The
-three application repositories currently produce four runtime images. Shared CI
+and produces its own Python image. Orders API, outbox publisher and receipt worker
+share one Java image, selected by `DELIVERY_ROLE=api|publisher|worker`. They run as
+separate processes and can scale independently without rebuilding the application.
+The three application repositories still produce four runtime images. Shared CI
 workflows prevent copying whole pipelines into every repository. Existing
 `Local-Narx-Space` repositories remain untouched.
 
@@ -111,25 +113,131 @@ permissions for image pulls. CI uses OIDC and application AWS access uses Pod Id
 These mechanisms must be implemented and tested before claiming end-to-end delivery.
 
 Reusable workflows are pinned by commit SHA. Each caller names the approved revision.
-The first foundation PRs may point to the reviewed candidate SHA so their checks can
-run before the central PR is merged; release workflows must use an approved revision.
+Callers use the merged `platform-ci` main revision. Squash merging changes the commit
+SHA: do not leave callers pinned to a deleted candidate branch commit. Merge shared
+workflow changes first, then update callers to that merged revision through PRs.
 
-## Queue behaviour to implement
+## Order events, receipts and queue recovery
 
-The payment provider's verified webhook confirms payment; a browser redirect does
-not. Store the payment/order change and an outbox event in one database transaction.
-An outbox publisher sends that event to SQS. A worker performs asynchronous order
-processing. A crash between sending and recording completion can produce duplicates,
-so both publishing and consuming must tolerate retries.
+Payment confirmation remains synchronous. A verified provider capture, checked by
+checkout verification or a signed webhook, updates the order to paid/confirmed and
+inserts `order_outbox` in the **same PostgreSQL transaction**. A browser redirect alone
+never confirms payment. The queue is not called in that transaction, so a queue outage
+delays receipt generation while payment confirmation continues.
 
-Consumers record an event ID and make state changes transactionally. Delete a queue
-message only after successful processing. Configure visibility timeout, bounded
-retries, a dead-letter queue, backlog/oldest-message alerts and a redrive procedure.
-Never place card data, passwords or complete customer records into queue messages.
+```mermaid
+flowchart LR
+    P[Verified captured payment] --> T[One database transaction]
+    T --> O[Paid order and outbox event]
+    O --> B[Outbox publisher]
+    B --> Q[Order-paid queue]
+    Q --> W[Receipt worker]
+    W --> R[Receipt and inbox marker in one transaction]
+    R --> D[Delete queue message after commit]
+    Q -->|Five failed receives| X[Dead-letter queue]
+```
 
-Dev/QA use ElasticMQ with separate queues. It implements a subset of SQS behaviour;
-real AWS integration checks must verify IAM, queue policies, retries and failure
-handling. Payment integration remains in sandbox mode.
+The event contains `eventId`, `type=order.paid`, `version=1`, `orderId`, `amount`,
+`currency=INR` and `paymentId`. It contains no customer name, address, email, card,
+password or session token. `V5__order_delivery.sql` creates the outbox, inbox and
+receipt tables. Existing paid orders are not backfilled; newly confirmed captures
+create events. Payment/webhook retries do not create a second event for an order.
+
+The worker creates an internal payment acknowledgement in `payment_receipts`, not
+a tax invoice, email, shipment or fulfilment transition. Authenticated order detail
+includes a `receipt` field when ready; it is null beforehand. The existing storefront
+does not yet render that field. A later refund retains the original receipt as a
+historical payment acknowledgement; refund status remains on the order.
+
+| Process | Responsibility | Queue outage behaviour |
+| --- | --- | --- |
+| `api` (default) | Payment/order transaction and outbox insert | API stays ready if its database is ready |
+| `publisher` | Send one due event, then mark published | Retry with exponential delay, capped at 60 seconds; never discard unsent events |
+| `worker` | Validate event, create receipt and inbox marker, then delete message | Failed messages become visible again; queue redrives after five failed receives |
+
+Publisher replicas select rows with `SKIP LOCKED`. Each send has a bounded SDK timeout;
+a row lock is held during that send. This simple approach suits current throughput.
+Higher-volume production systems should evaluate batches or a lease-based publisher
+rather than holding database connections during remote sends. A crash after send but
+before marking published can send the same event again. That is expected.
+
+The worker validates the message against the canonical outbox event. Inbox uniqueness
+and receipt creation commit together, so a crash after commit but before SQS deletion
+causes a harmless duplicate. A database failure rolls both writes back. The receipt's
+unique order/event constraints add another guard. This guarantee covers these database
+writes; external email/shipping calls would need their own idempotency mechanism.
+
+Default message visibility is 60 seconds. Processing uses a 10-second database
+transaction timeout; the worker receives one message per poll and only acknowledges
+after commit. `DELIVERY_VISIBILITY_SECONDS` must be at least 15 and at most 43200;
+15 is used only to shorten the local retry exercise. Production should retain an
+appropriate margin and add visibility extension before introducing slower work.
+
+The local Compose stack uses ElasticMQ 1.7.1 pinned by digest. Its H2 queue storage
+survives container restarts in `queue-data`; PostgreSQL survives in `database`.
+A one-shot init service gives the queue volume to UID 10001; the queue itself runs
+non-root. Neither SQS nor database ports are published. An explicit `DELIVERY_LOCAL=true`
+permits dummy credentials only against the local endpoint. Without that flag, the
+SDK uses its default credential chain and requires an HTTPS queue URL. EKS Pod Identity
+and narrowly scoped queue IAM permissions still need provisioning and verification.
+
+All three Java roles expose `/health/live`, `/health/ready` and `/actuator/prometheus`.
+Background-role readiness checks the database and queue; liveness does not require
+either dependency. Use those custom health paths in Helm. Worker/publisher HTTP ports
+must remain internal and should not receive storefront traffic.
+
+Publisher metrics include `commerce_outbox_pending`, `commerce_outbox_oldest_seconds`
+and `commerce_outbox_publish_total{result="sent|failed"}`. Worker metrics include
+`commerce_queue_consume_total{result="processed|duplicate|failed"}` and
+`commerce_queue_poll_total{result="failed"}`. Outbox gauges refresh every 30 seconds.
+Logs correlate event/order IDs without logging message bodies or credentials.
+Prometheus alert rules, DLQ-depth and queue-age alarms, and dashboards are still pending.
+An empty poll is normal; repeated processing failures or growing backlog need attention.
+
+### Local failure exercise
+
+Use a fresh disposable Compose project. This exercise stops/restarts only that project's
+queue and worker, creates test accounts/orders and injects temporary database constraints.
+It requires the queue-aware GitOps branch and the matching orders image. It is intentionally
+separate from the ordinary customer-flow test; never run it on a shared database.
+
+```bash
+# From platform-gitops, after building the four application images.
+DELIVERY_VISIBILITY_SECONDS=15 docker compose --project-name narx-events-validation \
+  --env-file local/.env -f local/compose.yaml up --no-build -d --wait
+NARX_LOCAL_TEST=1 NARX_QUEUE_TEST=1 NARX_COMPOSE_PROJECT=narx-events-validation \
+  python3 -m unittest discover -s tests -v
+# Remove this disposable exercise's database AND queue data when finished.
+docker compose --project-name narx-events-validation --env-file local/.env \
+  -f local/compose.yaml down --volumes
+```
+
+The test proves atomic payment/outbox rollback, payment success during a queue outage,
+publication after recovery, duplicate publisher replay, atomic consumer rollback,
+visibility retry, poison-message DLQ redrive and corrected replay without duplicate
+receipts. It also retains the existing customer/admin/refund checks. ElasticMQ implements
+a subset of SQS: these checks do not prove AWS IAM, encryption, retention or real-provider
+behaviour. AWS integration tests remain required before cloud rollout.
+
+### Recovery decisions
+
+1. If outbox backlog grows, inspect publisher health/logs and queue reachability/permissions.
+   Restore the dependency; due events retry automatically. Do not delete pending rows.
+2. If receipts lag but outbox is clear, inspect the worker, queue age and DLQ.
+   A worker restart recovers unacknowledged messages after the visibility timeout.
+3. Inspect a DLQ message and its event ID under restricted operator access. Fix its schema,
+   application or data failure first. Replay only trusted events, preserving `eventId`.
+   Copy successfully before removing the DLQ message; retain operational evidence.
+   Native SQS redrive will be tested on AWS; the local test explicitly copies/deletes.
+4. If a queue was irrecoverably lost, an operator can replay a reviewed outbox event by
+   clearing `published_at` and setting `next_attempt_at=CURRENT_TIMESTAMP` for that exact
+   event ID. Receipts already created remain deduplicated. Do not mass-reset the table.
+5. If an exercise fails, inspect logs, then remove its disposable volumes to clear injected
+   constraints and test state. Regular `down` preserves data and does not reset the exercise.
+
+Outbox/inbox/receipt history is retained for now. A retention/archival policy must be agreed
+before real production traffic; do not prune canonical events while replay is still possible.
+Dev/QA Kubernetes deployments will use isolated queues/data. They are not deployed yet.
 
 ## Application source and local preview
 
@@ -217,12 +325,12 @@ customer/admin separation, product version conflicts, order processing and refun
 ```bash
 NARX_LOCAL_TEST=1 NARX_COMPOSE_PROJECT=narx-commerce python3 -m unittest discover -s tests -v
 docker compose --env-file local/.env -f local/compose.yaml down
-# Only for intentionally discarding this local preview's PostgreSQL data:
+# Only for intentionally discarding this local preview's database and queue data:
 # docker compose --env-file local/.env -f local/compose.yaml down --volumes
 ```
 
 The test mutates its named local stack. Do not point it at a shared or production
-database. PostgreSQL data survives ordinary `down`; carts and simulator records do
+database. PostgreSQL and queue data survive ordinary `down`; carts and simulator records do
 not. Stopping and restarting the payment simulator does not constitute a provider
 recovery test and can leave its old local orders needing a fresh checkout.
 
@@ -231,7 +339,8 @@ The opt-in full-stack test passed against an isolated local project, including d
 guest checkout, required delivery, customer/admin separation, INR product data, stock
 reservation, idempotent checkout, invalid payment signature rejection, payment retries,
 order isolation, product version conflicts, fulfilment and refund retries. This evidence
-does not cover the real payment provider, SQS processing, Kubernetes releases or AWS.
+does not cover the real payment provider, Kubernetes releases or AWS. The separate
+queue exercise above covers local message processing and recovery.
 
 ## Infrastructure workflow
 
@@ -318,11 +427,10 @@ release records identify their repository and digest.
 1. Foundation PRs are merged. Upgrade GitHub Team before enforcing private-repo
    branch protection. Required reviewers, no self-review, no force pushes, resolved
    conversations, passing checks and restricted workflow changes must be verified.
-2. Review the application migration: source, licenses, runtime builds, unit tests and
-   local integration checks. Existing Java 21/Spring Boot, Node 22, Go and Python 3.12
-   runtimes are retained. Cart ownership is with the orders team; catalogue is a read API.
-3. Implement image security scanning/signing/publishing and the event/outbox/worker
-   flow. Add queue failure and duplicate-message tests; do not claim messaging is implemented yet.
+2. The application migration and local unit/integration checks are complete. Review the
+   outbox/worker changes and local retry/DLQ evidence. Existing application runtimes and
+   ownership remain; real payment-provider and AWS SQS integration are still pending.
+3. Implement image security scanning/signing/publishing and release promotion.
 4. Establish isolated local dev/QA, Argo CD, registry authentication, queue and data
    stores; verify releases through GitOps without Jenkins or direct CI cluster access.
 5. Produce a regional cost estimate and Terraform VPC/EKS/ECR/RDS/SQS/IAM modules.
@@ -340,3 +448,7 @@ release records identify their repository and digest.
 - [GitHub OIDC for AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
 - [EKS subnet requirements](https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html)
 - [SQS delivery semantics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues-at-least-once-delivery.html)
+
+- [ElasticMQ configuration and delivery limits](https://github.com/softwaremill/elasticmq)
+- [SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
+- [AWS Java SDK default credential chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html)
