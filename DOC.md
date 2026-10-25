@@ -455,7 +455,9 @@ kubectl --context kind-mega-local -n commerce-qa get service commerce-frontend c
 kubectl --context kind-mega-local -n commerce-qa logs deployment/narx-rollouts --tail=100
 kubectl --context kind-mega-local -n monitoring port-forward service/prometheus 19090:9090
 # Open http://localhost:19090/targets and query up{project="narx-commerce"}.
-# Grafana: https://grafana.narx.space/d/narx-commerce
+kubectl --context kind-mega-local -n monitoring port-forward service/grafana 13000:3000
+# Grafana: http://localhost:13000/d/narx-commerce or the existing HTTPS hostname.
+# On headless Linux, forward the needed local port over SSH from your browser machine.
 kubectl --context kind-mega-local -n monitoring port-forward service/alertmanager 19093:9093
 # Open http://localhost:19093 to inspect firing alerts, routes and silences.
 ```

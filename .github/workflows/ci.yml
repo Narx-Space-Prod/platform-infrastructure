@@ -24,7 +24,7 @@ jobs:
     with:
       working-directory: delivery
   local:
-    name: Local bootstrap syntax
+    name: Local bootstrap checks
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
