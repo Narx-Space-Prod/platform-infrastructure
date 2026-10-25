@@ -7,13 +7,17 @@ they do not mean a company or real delivery team operates this environment.
 
 ## Current status
 
-The six foundation PRs are merged and their post-merge checks passed. They introduced
-ownership, reusable workflow validation, Terraform state storage and a shared Helm chart.
-The application repositories provide the commerce source, container builds and tests;
-the GitOps repository provides an integrated local Docker preview. Kubernetes
-deployments, release automation and AWS infrastructure remain pending.
-The order outbox, publisher and receipt worker now run against local ElasticMQ;
-real AWS SQS integration and queue alerting remain pending. No AWS resources have been provisioned.
+The foundation and application migrations are merged. The local Docker preview
+exercises customer/admin flows and reliable order events using ElasticMQ. The delivery
+changes add reusable security checks, disabled-by-default ECR publishing, signed release
+records, reviewed promotion, Argo manifests and deployment smoke tests. Merging this code
+prepares delivery; it does not activate AWS or create Kubernetes applications.
+
+No AWS resources have been provisioned. No new Argo application is installed. ECR
+publishing remains disabled until identities, registry access and environment settings
+are configured. Real AWS SQS, payment-provider integration, cloud infrastructure and
+queue alerting still require live verification. The older Local-Narx-Space cluster
+applications are separate and are not managed by these repositories.
 
 The organisation uses GitHub Free and all six repositories are public. GitHub now
 enforces `main` branch protection: PRs, one CODEOWNER approval, the repository's CI
@@ -95,47 +99,219 @@ Catalogue reads products through HTTP and cart owns Redis keys. Services do not 
 each other's databases. The core has not been decomposed into database-per-domain
 microservices; any later split must be an explicit, tested architecture change.
 
-## Target delivery flow
+## CI and CD: what happens after a push
 
-1. Developer branches from `main` and opens a PR in the service repository.
-2. Hosted GitHub Actions runners run unprivileged tests, lint and security checks.
-   PR validation receives no deployment secrets and no AWS deployment permissions.
-3. An independent reviewer approves; required checks pass; the PR is squash-merged.
-4. The trusted main workflow builds one image, scans it and pushes it to ECR using
-   a narrowly scoped AWS IAM role via GitHub OIDC. Each image is identified by digest.
-5. Release automation changes the dev image digest through a GitOps PR. Argo CD
-   running locally pulls the approved desired state and deploys it.
-6. After dev verification, a QA promotion PR carries the same digest. The target
-   policy is automatic merge for eligible QA promotions after required checks.
-7. After QA verification, a production promotion PR requires human approval.
-8. The EKS Argo CD instance reconciles the approved production configuration. Health
-   and smoke tests verify the release. Failure handling must update desired state
-   so Argo does not repeatedly restore a failed release.
+Think of an image as a sealed delivery box. Its digest identifies the exact contents.
+Dev, QA and production receive the same box; rebuilding for each environment would
+create a different release and invalidate earlier verification.
 
-Current application CI validates workflow syntax and builds runtime images through
-their test stages. BuildKit caches avoid separate test-image builds and duplicate
-test wrappers. PRs have read-only tokens and no AWS credentials. ECR publishing,
-security scanning, signing and release promotion are still pending.
+1. Create a feature branch, push it and open a PR. Workflow lint and secret scanning
+   run first. Component builds then run tests inside their Docker stages, check the
+   non-root runtime, scan OS/application dependencies and generate a CycloneDX SBOM.
+   HIGH and CRITICAL findings, including unfixed findings, block the build. PR builds
+   receive read-only tokens; they never receive AWS credentials or the release key.
+2. An independent CODEOWNER approves and required checks pass before squash merge.
+   Changes dismiss stale reviews. Main runs the same checks again on the merged commit.
+3. When `DELIVERY_ENABLED=true`, the trusted publisher downloads the exact image
+   produced by the successful build. It does not rebuild it. GitHub OIDC assumes a
+   repository-specific AWS role through the main-only `registry-release` environment.
+   It pushes an immutable commit tag to ECR, then signs the digest and attaches signed
+   source provenance and an SBOM with Cosign. A conflicting existing tag fails.
+4. Only after all caller jobs succeed, a release record is published and the release
+   App requests GitOps reconciliation. A five-minute scheduled reconciliation also
+   recovers missed notifications. Records from incomplete/failed main CI do not qualify.
+5. GitOps verifies source CI, the permitted builder revision, caller repository/main
+   identity, source SHA, digest, provenance and SBOM. All four component identities
+   form one release bundle. Initial dev waits until every component is available.
+   Reconciliation opens a dev PR; it does not write directly to main.
+6. After approval and merge, local Argo CD pulls the dev desired state. It deploys the
+   umbrella chart, waits for readiness, then runs the PostSync smoke Job. A separate
+   observer App publishes `narx/deploy-dev` status for that GitOps revision.
+7. A trusted successful dev status permits a QA PR carrying the exact same four image
+   digests. Successful QA permits a production PR. **All three environment PRs require
+   human review under the current protection rules. No automatic QA merge or approval
+   bypass is configured.** A different policy would need a separate reviewed change.
+8. Production targets a registered EKS cluster named `narx-production`. It cannot deploy
+   to the laptop using the production Application. Cloud activation remains pending.
 
-The numbered release flow is the target, not the current implementation. GitHub-hosted runners do
-not directly access the local cluster. Local Argo CD pulls changes; trusted smoke
-tests will run inside the local cluster. Do not expose an unauthenticated local
-deployment endpoint or give an untrusted PR a self-hosted runner with cluster access.
+Documentation-only changes skip image work while the required build check still reports
+success. In the Orders repository, cart-only changes skip the Java build and Java-only
+changes skip cart. Orders and cart builds run in parallel after workflow/secret checks.
+BuildKit caches avoid separate test-image builds. Security evidence is retained for
+14 days; temporary main image-transfer artifacts for one day. Main runs use separate
+commit concurrency groups, so a newer push cannot cancel an older release build.
 
-Automatic QA promotion requires a trusted, narrowly scoped review/merge policy for
-verified release changes. A blanket human-review rule would also block QA automation.
-Design and test that exception before enabling auto-merge; do not grant a release bot
-unrestricted bypass of production approval. No bot approval or merge exception exists yet.
+`platform-ci` owns five reusable workflows: workflow/secret validation, application
+build/publish, release notification, Helm validation and Terraform validation. Service
+repositories contain short callers. GitOps has ordinary CI, a reconciler, and a trusted
+release verifier. This separation keeps privileged verification away from candidate code.
+The verifier uses `pull_request_target` but checks out only the reviewed base commit;
+PR release JSON is fetched as data and never executed. Enable its required status only
+once the verifier is on main and has reported successfully on a subsequent PR.
 
-Image pulls from private ECR require explicit authentication in local Kubernetes;
-short-lived registry credentials will need automated refresh. EKS uses scoped node
-permissions for image pulls. CI uses OIDC and application AWS access uses Pod Identity.
-These mechanisms must be implemented and tested before claiming end-to-end delivery.
+Reusable workflows and actions are pinned by commit SHA. Merge shared workflow changes
+first, then update callers to the merged revision. The allowed builder list lives in
+`platform-gitops/policy/builders.json`; retain old trusted builder SHAs while retained
+releases still depend on them. An arbitrary service commit cannot change that allowlist.
 
-Reusable workflows are pinned by commit SHA. Each caller names the approved revision.
-Callers use the merged `platform-ci` main revision. Squash merging changes the commit
-SHA: do not leave callers pinned to a deleted candidate branch commit. Merge shared
-workflow changes first, then update callers to that merged revision through PRs.
+### Rollback and failure behaviour
+
+A healthy deployment records the previous environment bundle and the GitOps revision
+with trusted successful evidence. A QA/production failure proposes a rollback PR to
+that recorded bundle. The reviewer approves, checks pass, and Argo applies the merged
+rollback. This is automatic detection/proposal with reviewed recovery, not unattended
+rollback execution. Dev does not automatically propose recovery. A first deployment
+has no previous verified release to restore. Rollback never reverses SQL migrations,
+refunds, stock changes or persistent data; migrations must remain backward compatible.
+A failed rollback cannot repeatedly toggle releases because its previous pointer is empty.
+
+Smoke tests check six readiness endpoints, INR catalogue data and the frontend response.
+They do not prove a real checkout/payment transaction. Local integration tests cover
+customer/admin/refund and queue-recovery behaviour using a simulator. A real provider
+sandbox test and a controlled Kubernetes rollout failure remain activation checks.
+
+If CI fails, inspect the failed job and fix through a PR. If Argo fails, inspect its
+operation and hook Job before changing desired state. Never manually retag an image or
+edit a Deployment behind GitOps to hide a failed rollout.
+
+### What the Python code does
+
+You do not need to memorise each line, but an operator should understand its inputs,
+permissions, decisions and failure modes. `platform-gitops/scripts/delivery.py` is the
+single release-policy entry point. `validate` checks bundle structure; `fixtures` makes
+temporary CI-only image data; `reconcile` discovers signed builds and proposes release
+or promotion PRs; `verify-candidate` applies trusted policy to PR data; `rollback`
+proposes the recorded previous healthy bundle. External commands use argument lists,
+and candidate files are never imported as Python. Unit tests mock GitHub/registry
+responses; a temporary real Git remote also tests updating an existing PR branch.
+
+`platform-infrastructure/local/bootstrap.py` handles local operator setup: namespace
+and initial credentials, session ECR pull credentials, and observer notification
+configuration. It does not provision AWS or support production namespaces. The existing
+`tests/test_local_stack.py` exercises the complete disposable app. These scripts have
+different trust boundaries and are kept separate rather than being copied into jobs.
+
+Local verification of release policy and the full chart is available without AWS:
+
+```bash
+cd platform-gitops
+python3 -m unittest discover -s tests -p 'test_delivery*.py' -v
+python3 scripts/delivery.py validate
+helm dependency build --skip-refresh charts/commerce
+python3 scripts/delivery.py fixtures /tmp/commerce-validation.json
+helm lint --strict charts/commerce -f environments/dev/runtime.yaml \
+  -f /tmp/commerce-validation.json
+helm template commerce charts/commerce -n commerce-dev \
+  -f environments/dev/runtime.yaml -f /tmp/commerce-validation.json
+# The generated images are fictional and must never be applied.
+cd ../platform-infrastructure
+terraform -chdir=delivery init -backend=false -input=false -lockfile=readonly
+terraform -chdir=delivery validate
+terraform -chdir=delivery test
+```
+
+The delivery root uses mocked plans only. The disposable full integration run on the
+patched Orders, cart and catalogue images passed in 167.8 seconds, including queue
+outage, duplicate, worker transaction rollback and DLQ recovery. Local image scans
+reported zero HIGH/CRITICAL findings at that run; vulnerability databases change, so
+CI scans again. This evidence does not replace live ECR/OIDC/signature or Argo tests.
+
+### GitHub Apps and activation settings
+
+Create Apps from organisation Settings → Developer settings → GitHub Apps. Disable
+webhooks when creating these Apps; polling/dispatch does not require an inbound server.
+Give each a descriptive homepage, for example the organisation URL. Install only on
+`platform-gitops`, not on all repositories, and generate separate private keys.
+
+| Identity | Suggested App name | Repository permissions | Where its private key goes |
+| --- | --- | --- | --- |
+| Release automation | `narx-space-prod-release` | Contents read/write, Pull requests read/write, Metadata read | GitHub Actions secret `NARX_RELEASE_APP_PRIVATE_KEY` in three application repos and GitOps |
+| Deployment evidence | `narx-space-prod-deployments` | Commit statuses read/write, Metadata read | `argocd-notifications-secret`, key `narx-github-privateKey` |
+
+Source release/build metadata is currently read from public application repositories.
+If they become private, the release verifier needs separately scoped source read access
+(Contents and Actions read); update the App installation and test that change first.
+The release App cannot approve its own PR or bypass main rules. The observer cannot
+write repository contents or PRs. Keep PEM files outside all repositories, with mode
+600. Never paste keys into chat or commit them. App ID, installation ID and bot login
+are public identifiers; the private key is the secret. The observer login is normally
+`<app-slug>[bot]`. Use the organisation's new Apps rather than the older Boutique App.
+
+Configure these repository variables after AWS review:
+
+| Repositories | Variables |
+| --- | --- |
+| All three application repos | `AWS_ACCOUNT_ID`, `AWS_REGION`, per-repo `AWS_RELEASE_ROLE_ARN`, `NARX_RELEASE_APP_ID`, `DELIVERY_ENABLED` |
+| GitOps | `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_VERIFICATION_ROLE_ARN`, `NARX_RELEASE_APP_ID`, `NARX_DEPLOYMENT_BOT_LOGIN`, `DELIVERY_ENABLED` |
+
+Main-only GitHub environments are `registry-release` for application repositories and
+`registry-verification` for GitOps. Terraform trusts those exact environment subjects
+and the STS audience. PR build jobs explicitly remove OIDC permission even though the
+trusted publishing job needs it. ECR mutation is limited to the owning component repos;
+the GitOps role can read images and signatures but cannot publish/delete them.
+
+`delivery/` defines the four ECR repositories, OIDC and scoped IAM roles. It does not
+create EKS, databases or a backend yet. Configure remote state before real application.
+Repositories use strict immutable tags, encryption, scan-on-push and destruction
+protection. An untagged-only lifecycle rule expires after 14 days. Tagged releases are
+retained for rollback, so storage can grow and requires a later live-reference-aware
+retention review. ECR storage is billable; image transfer can also cost money.
+
+Do not enable publishing until AWS roles/ECR, release App secrets and GitOps verification
+are ready. Then enable GitOps and application `DELIVERY_ENABLED` in a planned session
+and merge a reviewed application/workflow change that builds all initial components.
+Simply toggling the variable does not retroactively publish earlier images. Confirm
+four successful main release records before expecting the first dev PR.
+
+### Prepare local GitOps delivery after activation
+
+The helper in `platform-infrastructure/local/bootstrap.py` takes an explicit kind
+context and only supports dev/QA namespaces. It preserves existing runtime passwords.
+The session registry secret uses your explicit AWS profile and expires after 12 hours;
+refresh it before a lab session or image pulls can fail. This manual session refresh is
+a known local limitation, not an automated production credential solution. EKS uses
+node IAM for pulls and scoped Pod Identity for publisher/worker AWS calls.
+
+```bash
+cd platform-infrastructure
+python3 local/bootstrap.py prepare --context kind-mega-local --environment dev
+python3 local/bootstrap.py prepare --context kind-mega-local --environment qa
+aws sso login --profile narx-lab
+# Replace the example account/region with the reviewed values.
+python3 local/bootstrap.py refresh-registry --context kind-mega-local --environment dev \
+  --aws-profile narx-lab --account-id 123456789012 --region ap-south-1
+python3 local/bootstrap.py refresh-registry --context kind-mega-local --environment qa \
+  --aws-profile narx-lab --account-id 123456789012 --region ap-south-1
+# PEM path below is outside the repository. Substitute actual numeric IDs.
+python3 local/bootstrap.py configure-observer --context kind-mega-local \
+  --app-id 123456 --installation-id 12345678 --private-key-file /secure/path/deployments.pem \
+  --notifications-file ../platform-gitops/applications/notifications.json
+kubectl --context kind-mega-local apply -f ../platform-gitops/applications/local/commerce.json
+kubectl --context kind-mega-local -n argocd get applications
+kubectl --context kind-mega-local -n commerce-dev get pods,jobs
+kubectl --context kind-mega-local -n commerce-dev port-forward service/commerce-frontend 18080:80
+# For QA use namespace commerce-qa and local port 18081.
+```
+
+Configure the observer on the production Argo instance separately when it exists.
+The local helper merges only Narx notification keys and refuses to overwrite an existing
+different GitHub integration. Existing Slack settings are preserved. It sends secrets
+through stdin rather than shell arguments or a last-applied annotation. These commands
+have not been applied to the existing cluster as part of preparing this change.
+
+Each environment has its own PostgreSQL PVC, Redis and ElasticMQ in the local profile.
+Namespaces use restricted pod security and a memory/storage quota. The laptop needs
+capacity for both environments; resource settings do not create additional RAM. Local
+Redis is disposable and single-instance databases/queues are lab components. Network
+policies are rendered, but kindnet alone does not enforce them: use an enforcing CNI
+in a dedicated reviewed cluster before claiming network isolation. The cloud profile
+requires HTTPS origin, AWS region and private data CIDRs, disables local data stores,
+and needs real DB/Redis/SQS secrets and Pod Identity associations before activation.
+Never apply `applications/aws/commerce.json` as a local production deployment.
+
+The cloud runtime intentionally fails rendering until its environment-specific inputs
+are filled through review. No ingress/TLS, managed Redis endpoint, AWS secrets integration
+or full observability stack is silently provisioned by these CI/CD changes.
 
 ## Order events, receipts and queue recovery
 
@@ -364,9 +540,12 @@ queue exercise above covers local message processing and recovery.
 
 ## Infrastructure workflow
 
-Infrastructure PRs will run formatting, validation, mock tests, a security scan and
-an AWS-backed plan when scoped credentials exist. The foundation only implements
-formatting, validation and mocked state-security tests. It has no apply permission.
+Infrastructure PRs run formatting, validation, provider-mocked tests and a blocking
+HIGH/CRITICAL Terraform security scan for both bootstrap and delivery roots. AWS-backed
+plan/apply/destroy workflows still require scoped identities and the cloud cost review.
+No current workflow can apply infrastructure. The existing lab state bucket uses SSE-S3;
+its customer-managed-KMS scanner finding has a narrowly scoped exception expiring
+2027-01-20 and must be reviewed before production state activation.
 
 Before any deployment, select the AWS account and region, review a regional estimate,
 and configure budget alerts. The target is INR 1,000/month through limited runtime;
@@ -450,10 +629,12 @@ release records identify their repository and digest.
 2. The application migration and local unit/integration checks are complete. Review the
    outbox/worker changes and local retry/DLQ evidence. Existing application runtimes and
    ownership remain; real payment-provider and AWS SQS integration are still pending.
-3. Implement image security scanning/signing/publishing and release promotion.
+3. Merge and activate prepared image security/signing/publishing and release promotion
+   after App/AWS setup. Validate signature rejection and trusted rollout evidence live.
 4. Establish isolated local dev/QA, Argo CD, registry authentication, queue and data
    stores; verify releases through GitOps without Jenkins or direct CI cluster access.
-5. Produce a regional cost estimate and Terraform VPC/EKS/ECR/RDS/SQS/IAM modules.
+5. Produce a regional cost estimate and Terraform VPC/EKS/RDS/SQS modules; review
+   the prepared ECR/IAM root and complete remote state configuration.
    Configure scoped identity, state, secrets and the gated plan/apply/destroy workflows.
 6. Add production ingress/TLS, Prometheus/Grafana/Alertmanager, CloudWatch logs,
    service metrics, backup/restore, release notifications and recovery runbooks here.
@@ -472,3 +653,7 @@ release records identify their repository and digest.
 - [ElasticMQ configuration and delivery limits](https://github.com/softwaremill/elasticmq)
 - [SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
 - [AWS Java SDK default credential chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html)
+
+- [Argo CD GitHub deployment statuses](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/github/)
+- [ECR pricing](https://aws.amazon.com/ecr/pricing/)
+- [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
