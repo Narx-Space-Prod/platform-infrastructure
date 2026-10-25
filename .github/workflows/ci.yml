@@ -16,11 +16,11 @@ jobs:
   workflows:
     uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@f907416baf6ffca41626f10df94f7631d86de8c0
   terraform:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@f907416baf6ffca41626f10df94f7631d86de8c0
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@6e58479d8ce607e66411750d046f314c8a4e4534
     with:
       working-directory: bootstrap
   registry:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@f907416baf6ffca41626f10df94f7631d86de8c0
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@6e58479d8ce607e66411750d046f314c8a4e4534
     with:
       working-directory: delivery
   local:
