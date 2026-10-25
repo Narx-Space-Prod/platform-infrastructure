@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import secrets
 import subprocess
+from urllib.parse import urlparse
 
 
 def command(*args, input=None):
@@ -18,7 +19,7 @@ def command(*args, input=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['prepare', 'refresh-registry', 'configure-observer'])
+    parser.add_argument('operation', choices=['prepare', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications'])
     parser.add_argument('--context', required=True)
     parser.add_argument('--environment', choices=['dev', 'qa'])
     parser.add_argument('--aws-profile')
@@ -34,13 +35,44 @@ def main():
     base = ['kubectl', '--context', args.context]
     def apply(value):
         command(*base, 'apply', '--server-side', '--field-manager=narx-local-bootstrap', '-f', '-', input=json.dumps(value))
+    def notification_secret(values):
+        patch = {'stringData': values}
+        exists = command(*base, '-n', 'argocd', 'get', 'secret', 'argocd-notifications-secret', '--ignore-not-found', '-o', 'name')
+        if exists:
+            command(*base, '-n', 'argocd', 'patch', 'secret', 'argocd-notifications-secret', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps(patch))
+        else:
+            apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'argocd-notifications-secret','namespace':'argocd'}, **patch})
+    if args.operation == 'configure-delivery-notifications':
+        if not args.notifications_file:
+            parser.error('Delivery notifications need --notifications-file')
+        source = json.loads(args.notifications_file.read_text())['data']
+        data = {k:v for k,v in source.items() if k == 'service.webhook.slack' or k.startswith(('trigger.narx-slack-', 'template.narx-slack-'))}
+        if not data or not data.get('service.webhook.slack', '').startswith('url: $narx-slack-webhook\n'):
+            parser.error('The reviewed Slack service must reference the dedicated Narx secret key')
+        current = json.loads(command(*base, '-n', 'argocd', 'get', 'configmap', 'argocd-notifications-cm', '-o', 'json'))
+        existing = current.get('data', {}).get('service.webhook.slack')
+        if existing and existing != data['service.webhook.slack']:
+            parser.error('An existing Slack webhook service needs operator review; it will not be overwritten')
+        original = json.loads(command(*base, '-n', 'monitoring', 'get', 'secret', 'monitoring-integrations', '-o', 'json'))
+        encoded = original.get('data', {}).get('slack_webhook')
+        if not encoded:
+            parser.error('The existing monitoring Slack credential is missing')
+        webhook = base64.b64decode(encoded, validate=True).decode().strip()
+        url = urlparse(webhook)
+        if url.scheme != 'https' or url.hostname not in {'hooks.slack.com', 'hooks.slack-gov.com'} or url.username or url.password or not url.path:
+            parser.error('The monitoring credential must be an HTTPS Slack webhook')
+        notification_secret({'narx-slack-webhook': webhook})
+        command(*base, '-n', 'argocd', 'patch', 'configmap', 'argocd-notifications-cm', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps({'data': data}))
+        print('Configured Narx delivery summaries using the existing Slack credential, preserving other settings.')
+        return
     if args.operation == 'configure-observer':
         if not (args.app_id and args.app_id.isdecimal() and args.installation_id and args.installation_id.isdecimal()
                 and args.private_key_file and args.notifications_file):
             parser.error('Observer configuration needs numeric --app-id/--installation-id, --private-key-file and --notifications-file')
         data = json.loads(args.notifications_file.read_text())['data']
-        if not data or any(not k.startswith(('trigger.narx-', 'template.narx-')) or not isinstance(v, str) for k, v in data.items()):
+        if not data or any((not k.startswith(('trigger.narx-', 'template.narx-')) and k != 'service.webhook.slack') or not isinstance(v, str) for k, v in data.items()):
             parser.error('Notification patch may contain only Narx templates and triggers')
+        data = {k:v for k,v in data.items() if k != 'service.webhook.slack' and not k.startswith(('trigger.narx-slack-', 'template.narx-slack-'))}
         service = f'appID: {args.app_id}\ninstallationID: {args.installation_id}\nprivateKey: $narx-github-privateKey\n'
         current = json.loads(command(*base, '-n', 'argocd', 'get', 'configmap', 'argocd-notifications-cm', '-o', 'json'))
         existing = current.get('data', {}).get('service.github')
@@ -49,12 +81,7 @@ def main():
         key = args.private_key_file.read_text()
         if not key.startswith(('-----BEGIN RSA PRIVATE KEY-----', '-----BEGIN PRIVATE KEY-----')):
             parser.error('Provide an unencrypted GitHub App PEM key file stored outside the repository')
-        patch = {'stringData': {'narx-github-privateKey': key}}
-        exists = command(*base, '-n', 'argocd', 'get', 'secret', 'argocd-notifications-secret', '--ignore-not-found', '-o', 'name')
-        if exists:
-            command(*base, '-n', 'argocd', 'patch', 'secret', 'argocd-notifications-secret', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps(patch))
-        else:
-            apply({'apiVersion': 'v1', 'kind': 'Secret', 'metadata': {'name': 'argocd-notifications-secret', 'namespace': 'argocd'}, **patch})
+        notification_secret({'narx-github-privateKey': key})
         data['service.github'] = service
         command(*base, '-n', 'argocd', 'patch', 'configmap', 'argocd-notifications-cm', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps({'data': data}))
         print('Configured Narx deployment evidence, preserving other notification settings.')

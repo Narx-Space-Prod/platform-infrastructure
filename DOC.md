@@ -386,17 +386,32 @@ frontends named `frontend` in `dev` are not combined into one error rate or SLO.
 
 Alerts cover failed scrapes/readiness, restarting or stuck pods, unavailable Deployments,
 unbound PVCs, meaningful-volume HTTP errors, stalled paid-order outboxes, worker queue
-failures, degraded Rollouts/analysis and failed/stalled Argo reconciliation. HTTP error
+failures, degraded Rollouts (including failed analysis) and failed/stalled Argo reconciliation. HTTP error
 percentage alerts also require a minimum request rate, avoiding noise from one synthetic
 request. Native Prometheus rule tests cover backlog isolation, low traffic and rollout
 failure. Direct AWS queue age/DLQ-depth alarms and off-laptop alerting remain cloud work;
 local alerting is not a replacement for an independent production monitoring plane.
 
+Argo also sends a concise Slack success/failure summary for each actual environment
+sync. These notifications reuse the monitoring webhook through a dedicated secret key
+in `argocd`, not a new token or an application secret. Triggers deduplicate by operation
+start time and do not report an empty bootstrap release as deployed. Alertmanager owns
+operational alerts; Argo owns delivery summaries. Per-build GitHub Actions Slack summaries
+are not added by this integration.
+
+Retained failed AnalysisRuns are debugging history, not independently firing alerts;
+current Rollout/Argo degradation drives paging so a recovered release can resolve.
+
 The shared Slack credential exists, and local native Alertmanager configuration/routing
 checks select `slack-nonprod` for `project=narx-commerce, environment=qa`. Those tests
-run without network access and do not send Slack messages. A real firing/resolved Narx
+run without network access and do not send Slack messages. The delivery-notification
+helper reads only the existing Slack key, transfers it through stdin, preserves other
+notification settings and never prints or writes the webhook to disk. If the monitoring
+webhook rotates, rerun the helper to refresh its Argo copy. A real firing/resolved Narx
 notification must be verified after the monitoring changes are deployed. Argo GitHub
-status notifications still need the separate observer App described earlier.
+status notifications still need the separate observer App described earlier. Configure
+the equivalent Slack secret/service on production Argo during cloud bootstrap; the
+local helper deliberately refuses non-kind contexts.
 
 ### Activate the reviewed local configuration
 
@@ -412,6 +427,8 @@ gh repo clone Local-Narx-Space/boutique-gitops shared-monitoring
 cd platform-infrastructure
 python3 local/bootstrap.py prepare --context kind-mega-local --environment dev
 python3 local/bootstrap.py prepare --context kind-mega-local --environment qa
+python3 local/bootstrap.py configure-delivery-notifications --context kind-mega-local \
+  --notifications-file ../platform-gitops/applications/notifications.json
 kubectl --context kind-mega-local apply --server-side --field-manager=narx-platform-bootstrap \
   -f ../platform-gitops/applications/local/commerce.json
 kubectl --context kind-mega-local -n argocd get applicationsets,applications
@@ -555,7 +572,7 @@ separate from the ordinary customer-flow test; never run it on a shared database
 DELIVERY_VISIBILITY_SECONDS=15 docker compose --project-name narx-events-validation \
   --env-file local/.env -f local/compose.yaml up --no-build -d --wait
 NARX_LOCAL_TEST=1 NARX_QUEUE_TEST=1 NARX_COMPOSE_PROJECT=narx-events-validation \
-  python3 -m unittest discover -s tests -v
+  python3 -m unittest discover -s tests -p test_local_stack.py -v
 # Remove this disposable exercise's database AND queue data when finished.
 docker compose --project-name narx-events-validation --env-file local/.env \
   -f local/compose.yaml down --volumes
@@ -672,7 +689,7 @@ The integration test promotes only its generated throwaway account, then exercis
 customer/admin separation, product version conflicts, order processing and refunds.
 
 ```bash
-NARX_LOCAL_TEST=1 NARX_COMPOSE_PROJECT=narx-commerce python3 -m unittest discover -s tests -v
+NARX_LOCAL_TEST=1 NARX_COMPOSE_PROJECT=narx-commerce python3 -m unittest discover -s tests -p test_local_stack.py -v
 docker compose --env-file local/.env -f local/compose.yaml down
 # Only for intentionally discarding this local preview's database and queue data:
 # docker compose --env-file local/.env -f local/compose.yaml down --volumes

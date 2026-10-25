@@ -32,3 +32,4 @@ jobs:
         with:
           persist-credentials: false
       - run: python3 -m py_compile local/bootstrap.py
+      - run: python3 -m unittest discover -s tests -p test_local_notifications.py -v
