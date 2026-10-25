@@ -313,6 +313,159 @@ The cloud runtime intentionally fails rendering until its environment-specific i
 are filled through review. No ingress/TLS, managed Redis endpoint, AWS secrets integration
 or full observability stack is silently provisioned by these CI/CD changes.
 
+## Local monitoring and progressive delivery
+
+Narx reuses the existing `kind-mega-local` cluster and Argo CD installation. An
+ApplicationSet generates `narx-commerce-dev` and `narx-commerce-qa`, using separate
+namespaces, credentials and data volumes. Production remains a separate Application
+for the future registered EKS cluster `narx-production`. No new local cluster is needed.
+
+The ApplicationSet has a fixed dev/QA list, fails on missing template keys, and cannot
+select production. Its project allows only the Narx repository and those two namespaces.
+Removing an element does not automatically delete its Application; resource preservation
+also protects workloads from cascading Application deletion. Decommissioning still needs
+an explicit data-retention decision. Controller-owned Service hash selectors are ignored
+by Argo so self-healing does not fight the blue-green traffic switch.
+
+Dev uses ordinary Deployments. Only the frontend in QA and production uses an Argo
+Rollout. Backend services continue rolling updates. The frontend has active and preview
+Services, and a namespace-scoped controller pinned to the installed Rollouts v1.10.1
+release. Existing Boutique controllers watch their own namespaces and are not repointed.
+The controller has no ClusterRole or wildcard grants. Its required namespace read access
+includes Ingress discovery even though this frontend strategy does not need an ingress.
+Kubernetes API egress uses local service/node networks, not the laptop's changing IP.
+For private EKS API endpoints, populate reviewed VPC CIDRs during cloud activation.
+
+The delivery sequence after a reviewed release merge is:
+
+1. Start the new frontend ReplicaSet behind its preview Service.
+2. A pre-promotion Analysis Job checks readiness, HTML and INR products. It requires
+   three consecutive successful rounds, with bounded requests and a bounded retry window.
+3. Successful analysis lets the controller move the active Service to the candidate.
+   The GitOps PR supplied the human approval; a second manual Rollouts approval is not required.
+4. Post-promotion analysis checks the active Service. A failure makes Rollouts restore
+   stable traffic. The previous ReplicaSet is retained for 180 seconds, longer than the
+   analysis Job's 120-second deadline. Failed preview analysis leaves stable traffic intact.
+5. Argo's PostSync smoke Job verifies the environment. Its trusted GitHub deployment
+   status permits the next environment PR only after the deployment is healthy.
+6. Failed QA/production desired state can still generate a reviewed Git rollback PR.
+   Traffic recovery and reverting desired Git state are separate operations. Neither
+   operation reverses database migrations, orders, stock or payments.
+
+Analysis currently uses functional Jobs. Prometheus supplies operational alerts and
+visibility; no request-rate/latency metric-based rollout gate is claimed. Low-traffic
+lab environments need deliberate sampling rules before adding such a gate. The live
+local exercise used isolated fixture responses, verified preview rejection, post-switch
+traffic restoration and healthy promotion, and removed its temporary namespace. It was
+not an ECR-backed app release or an AWS production test.
+
+### One shared observability stack
+
+The existing monitoring Application remains the sole owner of Prometheus, Grafana,
+Alertmanager, Blackbox Exporter, kube-state-metrics, node-exporter, Loki and Alloy.
+No duplicate stack or monitoring database is created. It consumes two reviewed Git sources:
+the shared chart in `Local-Narx-Space/boutique-gitops/monitoring` and project values in
+`Narx-Space-Prod/platform-gitops/monitoring/local-values.yaml`. The old project stays
+owned by its existing Applications. Only shared monitoring gains the Narx integration.
+
+| Component | Narx integration |
+| --- | --- |
+| Prometheus | Discovers the six runtime roles, QA Rollouts controller, internal readiness probes and Narx Argo application status |
+| Grafana | `Narx Commerce — Delivery and Runtime` dashboard, UID `narx-commerce`, dev/QA selection |
+| Alertmanager | Routes dev/QA operational alerts to the existing non-production Slack receiver; separates grouping/inhibition by project |
+| Slack | Uses the existing `monitoring-integrations/slack_webhook` secret; no webhook is committed or placed in application namespaces |
+| kube-state-metrics | Observes Narx pods, Deployments, ReplicaSets, Jobs and PVCs using namespace-scoped read permissions |
+| Blackbox Exporter | Checks internal readiness paths; it discovers only existing Narx pods, so inactive environments do not create permanent fake outages |
+| Alloy and Loki | Collect and display Narx container logs with project, environment, service, namespace, pod and container labels |
+| Argo Rollouts | Publishes controller, rollout phase and analysis metrics; functional Analysis Jobs control the frontend switch |
+
+Use `project="narx-commerce"` in metric/log queries. The application retains some
+legacy `boutique_http_*` metric names; the project label provides identity without
+rewriting standard metrics. Existing Boutique queries are scoped separately so two
+frontends named `frontend` in `dev` are not combined into one error rate or SLO.
+
+Alerts cover failed scrapes/readiness, restarting or stuck pods, unavailable Deployments,
+unbound PVCs, meaningful-volume HTTP errors, stalled paid-order outboxes, worker queue
+failures, degraded Rollouts/analysis and failed/stalled Argo reconciliation. HTTP error
+percentage alerts also require a minimum request rate, avoiding noise from one synthetic
+request. Native Prometheus rule tests cover backlog isolation, low traffic and rollout
+failure. Direct AWS queue age/DLQ-depth alarms and off-laptop alerting remain cloud work;
+local alerting is not a replacement for an independent production monitoring plane.
+
+The shared Slack credential exists, and local native Alertmanager configuration/routing
+checks select `slack-nonprod` for `project=narx-commerce, environment=qa`. Those tests
+run without network access and do not send Slack messages. A real firing/resolved Narx
+notification must be verified after the monitoring changes are deployed. Argo GitHub
+status notifications still need the separate observer App described earlier.
+
+### Activate the reviewed local configuration
+
+Merge the shared CI update first and pin the GitOps caller to its merged revision.
+Merge both the Narx GitOps integration and shared monitoring chart PRs before changing
+the live monitoring Application: its additional values file must exist on main.
+Publishing stays disabled until ECR and GitHub identities are ready. Registering an
+ApplicationSet does not publish images or turn bootstrap release files into deployments.
+
+```bash
+# Run beside the existing platform repositories; this is the shared chart's source.
+gh repo clone Local-Narx-Space/boutique-gitops shared-monitoring
+cd platform-infrastructure
+python3 local/bootstrap.py prepare --context kind-mega-local --environment dev
+python3 local/bootstrap.py prepare --context kind-mega-local --environment qa
+kubectl --context kind-mega-local apply --server-side --field-manager=narx-platform-bootstrap \
+  -f ../platform-gitops/applications/local/commerce.json
+kubectl --context kind-mega-local -n argocd get applicationsets,applications
+# Apply the reviewed multi-source definition for the already existing monitoring app.
+kubectl --context kind-mega-local apply -f ../shared-monitoring/applications/monitoring-homelab.yaml
+# Its existing sync policy is manual; request this one reviewed reconciliation.
+kubectl --context kind-mega-local -n argocd patch application boutique-monitoring-homelab \
+  --type merge -p '{"operation":{"sync":{"prune":false}}}'
+```
+
+Before loading both complete environments, check host RAM and retire obsolete workloads
+through their own GitOps configuration if necessary. Kind nodes share the laptop's RAM;
+three Ready nodes do not provide three independent machines' memory. Namespace quotas
+bound requests but do not create capacity. Monitoring and old application resources are
+not deleted by this integration. New local database/session credentials are preserved
+on repeated bootstrap runs.
+
+### Inspect deployments, alerts and logs
+
+```bash
+kubectl --context kind-mega-local -n commerce-qa get rollouts,analysisruns,jobs,pods
+kubectl --context kind-mega-local -n commerce-qa describe rollout commerce-frontend
+kubectl --context kind-mega-local -n commerce-qa get service commerce-frontend commerce-frontend-preview -o yaml
+kubectl --context kind-mega-local -n commerce-qa logs deployment/narx-rollouts --tail=100
+kubectl --context kind-mega-local -n monitoring port-forward service/prometheus 19090:9090
+# Open http://localhost:19090/targets and query up{project="narx-commerce"}.
+# Grafana: https://grafana.narx.space/d/narx-commerce
+kubectl --context kind-mega-local -n monitoring port-forward service/alertmanager 19093:9093
+# Open http://localhost:19093 to inspect firing alerts, routes and silences.
+```
+
+In Grafana Explore, choose Loki and query
+`{project="narx-commerce",environment="qa"}`. The project dashboard is empty until real
+Narx workloads run and produce metrics/logs; this is not evidence of a healthy deployed app.
+For an HTTP error, inspect service logs and dependencies. For an outbox alert, check queue
+connectivity and publisher retries without deleting events. For a Rollout failure, inspect
+its Analysis Job logs and active Service selector, confirm stable traffic, then review the
+GitOps rollback proposal. Do not manually overwrite Service hash selectors.
+
+To repeat the isolated controller test, first build the local frontend image using the
+preview commands, install PyYAML 6.0.3, then run:
+
+```bash
+cd platform-gitops
+helm dependency build --skip-refresh charts/commerce
+NARX_ROLLOUT_TEST=1 NARX_KUBE_CONTEXT=kind-mega-local \
+  python3 -m unittest discover -s tests -p test_rollout_local.py -v
+```
+
+This refuses to reuse an existing `narx-rollout-validation` namespace, loads only the
+local fixture image into kind, and deletes that namespace afterward. It never changes
+committed release identities, existing application namespaces or AWS. Rollouts CRDs
+must already exist; production CRD installation belongs to cloud platform bootstrap.
+
 ## Order events, receipts and queue recovery
 
 Payment confirmation remains synchronous. A verified provider capture, checked by
