@@ -5,7 +5,7 @@ The project models application teams delivering a commerce system and a platform
 providing CI, infrastructure and GitOps. Team memberships represent a learning scenario;
 they do not mean a company or real delivery team operates this environment.
 
-## Current status
+## Verified activation checkpoint — 4 November 2026
 
 The agreed target is now fully local Narx Commerce with a dedicated Kubernetes cluster
 for dev, QA and production, sharing only the existing Argo CD control plane. This is
@@ -23,12 +23,18 @@ is deployed. Operator-created access Roles cause two harmless orphan warnings un
 specific bootstrap exceptions in the GitOps activation follow-up are reviewed/applied.
 
 Dedicated release and observer Apps are installed and validated. Private registry pull
-credentials are prepared in all three namespaces. Source build/test/security checks pass.
-Initial source publication was enabled while GitOps reconciliation stayed disabled, but
-the first publication jobs are waiting at the legacy registry-release environment gate.
-No private image publication or real application release is claimed yet. The follow-up
-removes that unnecessary image gate and moves release keys to main-only gitops-release
-secrets; repository copies must be removed only after the reviewed caller cutover.
+credentials are prepared in all three namespaces. The initial four packages are private,
+linked to the correct source repositories, and backed by fully successful main CI runs.
+An operator verification used the reviewed policy to validate source-bound signed
+provenance and signed SBOMs for all four digests. This proves the initial artifacts;
+it does not prove Kubernetes deployment, checkout, promotion or rollback.
+
+The reviewed shared workflow now has separate image-publishing and protected-release
+credential boundaries (platform-ci main 666b596743c0fd43a0ba3ed1efb8dc7b89b7593e).
+The three service caller upgrades and GitOps allowlist update are prepared for review.
+Encrypted App-key copies exist in main-only gitops-release environments; remove the
+repository copies after the reviewed cutover. GitOps reconciliation remains disabled
+until private package Actions access and the complete release path are verified.
 
 Original Boutique's app/monitoring workloads and Jenkins are temporarily paused with
 user approval to free memory. Its PVC identities and original settings are retained;
@@ -253,9 +259,9 @@ identifiers; the key is secret.
 The target boundary uses a main-only `gitops-release` environment for the App key.
 Both source notification jobs and the GitOps reconciler use it. Image publication uses
 only the ephemeral GITHUB_TOKEN and a main-only job guard; read-only trusted verification
-uses only its package token. Neither needs an AWS-era deployment environment. The old
-registry-release gate is currently blocking initial publication; the boundary fix and
-caller pins must be reviewed before treating this target behavior as active.
+uses only its package token. Neither needs an AWS-era deployment environment. The initial runs used the older
+registry-release gate and eventually completed. The shared boundary fix is reviewed;
+caller upgrades and the credential cutover must finish before the new path is active.
 
 An App key at repository scope can be referenced by same-repository PR workflows.
 Protected environment scope prevents that: select only main in deployment branch rules,
@@ -323,8 +329,8 @@ First-time private package setup has a deliberate sequence:
 A flag change alone does not publish older completed runs. A main CI rerun is an explicit
 publication operation; no fake application change is needed. Do not describe image
 signatures/private pulls as tested merely because lint or mocked tests passed. At this
-snapshot the three source flags are enabled and GitOps is still disabled, with the
-legacy image environment gate awaiting the reviewed workflow correction.
+checkpoint the three source flags are enabled and the first four private source releases
+are verified; GitOps stays disabled pending package Actions access and the caller cutover.
 
 The delivery/ Terraform root still contains ECR/IAM scaffolding from the retired AWS
 plan. It is inactive reference code and is not applied for this local architecture.
@@ -351,7 +357,7 @@ monitoring deployment is verified. No old resources are deleted by the bootstrap
 | Workload AppProject | `narx-commerce-local`, Narx GitOps repository only | Applied to shared Argo CD |
 | Registered destination | `narx-local`, only three commerce namespaces | Registered; positive workload and negative cluster/system-secret RBAC checks passed |
 | Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Namespaces and independent runtime/pull secrets prepared; real workloads pending |
-| Publishing/verification | Private GHCR with ephemeral CI tokens | Source checks passed; publication currently waits at a legacy environment gate |
+| Publishing/verification | Private GHCR with ephemeral CI tokens | Four initial private artifacts/source CI/provenance/SBOMs verified; credential/caller cutover still in review |
 | Monitoring | Dedicated Narx stack on the Narx cluster | Pending; do not copy the Boutique monitoring Application |
 | Notifications | Separate observer key in shared Argo | GitHub observer configured; dedicated Narx Slack replacement/live message proof pending |
 
