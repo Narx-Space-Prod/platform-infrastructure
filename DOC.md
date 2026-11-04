@@ -341,12 +341,9 @@ free -h
 docker stats --no-stream
 kind get clusters
 # Run once if narx-commerce does not already exist. No AWS service is contacted.
-kind create cluster --name narx-commerce --config local/kind.yaml --wait 120s
+kind create cluster --name narx-commerce --config local/kind.yaml --wait 0s
 kubectl --context kind-narx-commerce get nodes -o wide
 kubectl --context kind-narx-commerce get storageclass
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment dev
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment qa
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment production
 ```
 
 The API host port listens only on loopback. Both local clusters use Docker's kind
@@ -355,17 +352,42 @@ stable container DNS rather than the laptop's changing LAN IP. Independent clust
 can use overlapping pod/service CIDRs here because only their API endpoints are crossed.
 This arrangement is for one host; it is not routing between production VPCs.
 
-Kind's default kindnet does **not** enforce Kubernetes NetworkPolicies. Install and
-verify an enforcing CNI before treating the policy YAML as a security boundary or
-activating untrusted workloads. Cluster separation alone does not isolate Docker hosts.
-`local/kind.yaml` deliberately describes the current bootstrap capability rather than
-claiming a CNI installation it does not perform.
+The definition disables kindnet so Cilium can be installed as the policy-enforcing CNI.
+The node and CoreDNS are expected to remain NotReady/Pending until the next step;
+kind creation must not wait for network readiness before installing the network plugin.
+The Cilium configuration keeps kind's kube-proxy and Kubernetes pod CIDR allocation,
+uses one operator replica, and disables optional Hubble/Envoy DaemonSets for capacity.
+Cluster separation does not isolate the shared Docker host. NetworkPolicy enforcement
+must still be verified live against the actual application rules before activation.
 
 #### 2. Install platform prerequisites on the remote cluster
 
-The shared Argo CD workload credential cannot create CRDs or ClusterRoles. Install
-Rollouts CRDs as an operator before deploying QA/production. The release manifest is
-checksum-locked in the GitOps repository; do not install its cluster-wide controller
+Platform bootstrap is an operator action with an explicit Narx kube context. The
+shared Argo workload credential cannot install the CNI, CRDs or ClusterRoles. Cilium
+is version-pinned and the downloaded chart archive is checksum-verified in CI and here.
+No cluster changes occur during the CI lint/template checks.
+
+```bash
+mkdir -p /tmp/narx-cilium
+helm pull oci://quay.io/cilium/charts/cilium --version 1.20.4 --destination /tmp/narx-cilium
+printf '%s  %s\n' \
+  505abff8385811df1a949776fc42e9f10697989a332acc86d6e8933efcb855ed \
+  /tmp/narx-cilium/cilium-1.20.4.tgz | sha256sum --check --strict
+helm upgrade --install cilium /tmp/narx-cilium/cilium-1.20.4.tgz \
+  --kube-context kind-narx-commerce --namespace kube-system \
+  -f local/cilium-values.yaml --wait --timeout 5m
+kubectl --context kind-narx-commerce wait --for=condition=Ready nodes --all --timeout=180s
+kubectl --context kind-narx-commerce -n kube-system rollout status deployment/coredns --timeout=180s
+kubectl --context kind-narx-commerce -n kube-system exec daemonset/cilium -- cilium-dbg status --brief
+```
+
+These status checks prove basic networking readiness, not application policy behavior.
+Verify that allowed service dependencies work and unauthorized cross-environment traffic
+fails before enabling releases. Do not uninstall the CNI on a live workload cluster;
+change its reviewed values/version and use the upgrade procedure.
+
+Install Rollouts CRDs as an operator before deploying QA/production. The release manifest
+is checksum-locked in the GitOps repository; do not install its cluster-wide controller
 because the application chart owns namespace-scoped controllers.
 
 ```bash
@@ -387,12 +409,16 @@ PYTHON
 kubectl --context kind-narx-commerce get crd rollouts.argoproj.io analysisruns.argoproj.io
 ```
 
-An enforcing CNI, metrics-server for any enabled HPAs, and independently owned monitoring
-are remaining platform activation tasks. The configuration above does not install them.
+Live Cilium/policy verification, metrics-server for any enabled HPAs, and independently
+owned monitoring remain platform activation tasks. Linting/rendering Cilium in CI does
+not install it or prove enforcement on the laptop.
 
 #### 3. Register only Narx workload namespaces in shared Argo CD
 
 ```bash
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment dev
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment qa
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment production
 python3 local/bootstrap.py register-cluster \
   --context kind-narx-commerce --management-context kind-mega-local
 # Check the remote identity has only the intended namespace access.
@@ -848,8 +874,8 @@ release records identify their repository and digest.
 ## Remaining implementation milestones
 
 1. Review and merge dedicated-cluster bootstrap and local Argo destination changes.
-   Check laptop capacity before creating the node. Install an enforcing CNI and required
-   CRDs, prepare the namespaces, register the restricted workload identity, and retarget
+   Check laptop capacity before creating the node. Install the pinned Cilium CNI and
+   required CRDs, verify networking, prepare namespaces, register the identity, and retarget
    only the empty Narx Applications. Keep Boutique workloads and shared Argo CD intact.
 2. Merge the GHCR publisher first; pin callers and the GitOps builder allowlist to its
    final reviewed main SHA. Configure package access and separate Narx release/observer
@@ -881,5 +907,7 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [AWS Java SDK default credential chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html)
 
 - [Argo CD GitHub deployment statuses](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/github/)
-- [ECR pricing](https://aws.amazon.com/ecr/pricing/)
+- [GHCR authentication and package access](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Cilium installation on kind](https://docs.cilium.io/en/stable/installation/kind/)
+- [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
