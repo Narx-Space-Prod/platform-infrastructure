@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Prepare only the new local namespaces and short-lived ECR pull credentials.
+"""Bootstrap the dedicated Narx kind cluster and shared Argo CD integration.
 
-Run with an explicit kube context and AWS profile. No production namespace support,
-no secret files, no automatic password rotation, and no AWS provisioning.
+Explicit contexts, preserved runtime credentials, no AWS provisioning.
 """
 import argparse
 import base64
@@ -10,6 +9,7 @@ import json
 from pathlib import Path
 import secrets
 import subprocess
+import time
 from urllib.parse import urlparse
 
 
@@ -19,9 +19,10 @@ def command(*args, input=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['prepare', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications'])
+    parser.add_argument('operation', choices=['prepare', 'register-cluster', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications'])
     parser.add_argument('--context', required=True)
-    parser.add_argument('--environment', choices=['dev', 'qa'])
+    parser.add_argument('--management-context')
+    parser.add_argument('--environment', choices=['dev', 'qa', 'production'])
     parser.add_argument('--aws-profile')
     parser.add_argument('--account-id')
     parser.add_argument('--region')
@@ -29,9 +30,12 @@ def main():
     parser.add_argument('--installation-id')
     parser.add_argument('--private-key-file', type=Path)
     parser.add_argument('--notifications-file', type=Path)
+    parser.add_argument('--slack-webhook-file', type=Path)
     args = parser.parse_args()
     if not args.context.startswith('kind-'):
         parser.error('This helper is only for an explicitly named local kind cluster')
+    if args.operation in {'prepare', 'register-cluster', 'refresh-registry'} and args.context != 'kind-narx-commerce':
+        parser.error('Narx workloads must use the dedicated kind-narx-commerce context')
     base = ['kubectl', '--context', args.context]
     def apply(value):
         command(*base, 'apply', '--server-side', '--field-manager=narx-local-bootstrap', '-f', '-', input=json.dumps(value))
@@ -42,9 +46,52 @@ def main():
             command(*base, '-n', 'argocd', 'patch', 'secret', 'argocd-notifications-secret', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps(patch))
         else:
             apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'argocd-notifications-secret','namespace':'argocd'}, **patch})
+    if args.operation == 'register-cluster':
+        if not args.management_context or not args.management_context.startswith('kind-') or args.management_context == args.context:
+            parser.error('Registration needs a separate explicit --management-context hosting Argo CD')
+        namespaces = ['commerce-dev', 'commerce-qa', 'commerce-production']
+        for namespace in namespaces:
+            command(*base, 'get', 'namespace', namespace, '-o', 'name')
+        apply({'apiVersion':'v1','kind':'Namespace','metadata':{'name':'narx-system'}})
+        apply({'apiVersion':'v1','kind':'ServiceAccount','metadata':{'name':'argocd-manager','namespace':'narx-system'}})
+        for namespace in namespaces:
+            # Namespace administrator, like argocd cluster add --namespace.
+            # No ClusterRole/ClusterRoleBinding: platform CRDs remain an operator task.
+            apply({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'Role',
+                   'metadata':{'name':'narx-argocd-manager','namespace':namespace},
+                   'rules':[{'apiGroups':['*'],'resources':['*'],
+                             'verbs':['get','list','watch','create','update','patch','delete']}]})
+            apply({'apiVersion':'rbac.authorization.k8s.io/v1','kind':'RoleBinding',
+                   'metadata':{'name':'narx-argocd-manager','namespace':namespace},
+                   'roleRef':{'apiGroup':'rbac.authorization.k8s.io','kind':'Role','name':'narx-argocd-manager'},
+                   'subjects':[{'kind':'ServiceAccount','name':'argocd-manager','namespace':'narx-system'}]})
+        apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'argocd-manager-token','namespace':'narx-system',
+               'annotations':{'kubernetes.io/service-account.name':'argocd-manager'}},
+               'type':'kubernetes.io/service-account-token'})
+        for _ in range(20):
+            token_secret = json.loads(command(*base, '-n', 'narx-system', 'get', 'secret', 'argocd-manager-token', '-o', 'json'))
+            if token_secret.get('data', {}).get('token'):
+                break
+            time.sleep(1)
+        else:
+            raise SystemExit('Kubernetes did not populate the Argo service-account token; registration was not written')
+        kubeconfig = json.loads(command(*base, 'config', 'view', '--raw', '--minify', '-o', 'json'))
+        ca = kubeconfig['clusters'][0]['cluster']['certificate-authority-data']
+        registration = {'apiVersion':'v1','kind':'Secret','metadata':{
+            'name':'narx-local-cluster','namespace':'argocd',
+            'labels':{'argocd.argoproj.io/secret-type':'cluster'}},'type':'Opaque',
+            'stringData':{'name':'narx-local','server':'https://narx-commerce-control-plane:6443',
+                          'project':'narx-commerce-local','namespaces':','.join(namespaces),
+                          'clusterResources':'false','config':json.dumps({
+                              'bearerToken':base64.b64decode(token_secret['data']['token'], validate=True).decode(),
+                              'tlsClientConfig':{'insecure':False,'caData':ca}})}}
+        command('kubectl', '--context', args.management_context, 'apply', '--server-side',
+                '--field-manager=narx-local-bootstrap', '-f', '-', input=json.dumps(registration))
+        print('Registered narx-local in shared Argo CD, scoped to the three commerce namespaces. Token not displayed.')
+        return
     if args.operation == 'configure-delivery-notifications':
-        if not args.notifications_file:
-            parser.error('Delivery notifications need --notifications-file')
+        if not args.notifications_file or not args.slack_webhook_file:
+            parser.error('Delivery notifications need --notifications-file and an independent --slack-webhook-file')
         source = json.loads(args.notifications_file.read_text())['data']
         data = {k:v for k,v in source.items() if k == 'service.webhook.slack' or k.startswith(('trigger.narx-slack-', 'template.narx-slack-'))}
         if not data or not data.get('service.webhook.slack', '').startswith('url: $narx-slack-webhook\n'):
@@ -53,17 +100,13 @@ def main():
         existing = current.get('data', {}).get('service.webhook.slack')
         if existing and existing != data['service.webhook.slack']:
             parser.error('An existing Slack webhook service needs operator review; it will not be overwritten')
-        original = json.loads(command(*base, '-n', 'monitoring', 'get', 'secret', 'monitoring-integrations', '-o', 'json'))
-        encoded = original.get('data', {}).get('slack_webhook')
-        if not encoded:
-            parser.error('The existing monitoring Slack credential is missing')
-        webhook = base64.b64decode(encoded, validate=True).decode().strip()
+        webhook = args.slack_webhook_file.read_text().strip()
         url = urlparse(webhook)
         if url.scheme != 'https' or url.hostname not in {'hooks.slack.com', 'hooks.slack-gov.com'} or url.username or url.password or not url.path:
             parser.error('The monitoring credential must be an HTTPS Slack webhook')
         notification_secret({'narx-slack-webhook': webhook})
         command(*base, '-n', 'argocd', 'patch', 'configmap', 'argocd-notifications-cm', '--type=merge', '--patch-file=/dev/stdin', input=json.dumps({'data': data}))
-        print('Configured Narx delivery summaries using the existing Slack credential, preserving other settings.')
+        print('Configured Narx delivery summaries using its own Slack credential, preserving other settings.')
         return
     if args.operation == 'configure-observer':
         if not (args.app_id and args.app_id.isdecimal() and args.installation_id and args.installation_id.isdecimal()
