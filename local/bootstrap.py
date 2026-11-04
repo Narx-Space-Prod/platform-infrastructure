@@ -23,9 +23,8 @@ def main():
     parser.add_argument('--context', required=True)
     parser.add_argument('--management-context')
     parser.add_argument('--environment', choices=['dev', 'qa', 'production'])
-    parser.add_argument('--aws-profile')
-    parser.add_argument('--account-id')
-    parser.add_argument('--region')
+    parser.add_argument('--registry-user')
+    parser.add_argument('--registry-token-file', type=Path)
     parser.add_argument('--app-id')
     parser.add_argument('--installation-id')
     parser.add_argument('--private-key-file', type=Path)
@@ -148,17 +147,21 @@ def main():
                'spec':{'hard':{'requests.memory':'1536Mi','limits.memory':'3Gi','pods':'30','requests.storage':'4Gi'}}})
         print('Prepared',namespace,'without changing existing database/session credentials.')
     else:
-        if not args.aws_profile or not args.account_id or not args.region:
-            parser.error('Registry refresh needs --aws-profile, --account-id and --region')
-        identity = json.loads(command('aws','--profile',args.aws_profile,'sts','get-caller-identity'))
-        if identity['Account'] != args.account_id:
-            parser.error('AWS profile belongs to another account')
-        password = command('aws','--profile',args.aws_profile,'ecr','get-login-password','--region',args.region)
-        registry = f'{args.account_id}.dkr.ecr.{args.region}.amazonaws.com'
-        docker = {'auths':{registry:{'auth':base64.b64encode(('AWS:'+password).encode()).decode()}}}
-        apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'ecr-pull','namespace':namespace},
+        if not args.registry_user or not args.registry_token_file:
+            parser.error('Private GHCR pulls need --registry-user and --registry-token-file')
+        if ':' in args.registry_user or any(c.isspace() for c in args.registry_user):
+            parser.error('Registry username may not contain a colon or whitespace')
+        if args.registry_token_file.stat().st_mode & 0o077:
+            parser.error('Registry token file must be private to its owner (chmod 600)')
+        if args.registry_token_file.resolve().is_relative_to(Path(__file__).resolve().parents[1]):
+            parser.error('Registry token file must be outside the repository')
+        password = args.registry_token_file.read_text().strip()
+        if not password or any(c.isspace() for c in password):
+            parser.error('Registry token must be nonempty and contain no whitespace')
+        docker = {'auths':{'ghcr.io':{'auth':base64.b64encode((args.registry_user+':'+password).encode()).decode()}}}
+        apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'ghcr-pull','namespace':namespace},
                'type':'kubernetes.io/dockerconfigjson','stringData':{'.dockerconfigjson':json.dumps(docker)}})
-        print('Refreshed short-lived registry credential for',namespace,'(ECR tokens expire after 12 hours).')
+        print('Refreshed GHCR pull credential for',namespace,'. Rotate it before its configured expiry.')
 
 
 if __name__ == '__main__':
