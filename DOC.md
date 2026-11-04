@@ -11,21 +11,30 @@ The agreed target is now fully local Narx Commerce with a dedicated Kubernetes c
 for dev, QA and production, sharing only the existing Argo CD control plane. This is
 separate from both the Jenkins Boutique project and the standalone `commerce-aws` project.
 
-This change prepares the cluster definition, restricted registration helper and three
-local Argo destinations. It does not create a new cluster or deploy real application
-releases by merging. The previous dev/QA Applications are currently empty bootstrap
-releases on `kind-mega-local`; they are not working storefront deployments. Shared
-monitoring still includes the old Narx integration until an independent Narx stack is
-ready. Existing Boutique applications and data are not migration targets.
+As of 4 November 2026, the dedicated `kind-narx-commerce` cluster is created and Ready.
+Kubernetes v1.34.0, Cilium 1.20.4 and CoreDNS are healthy. A disposable live traffic test
+proved that the selected namespace could reach a service, another namespace was blocked,
+and the permitted client still worked afterward. Its three test namespaces were removed.
 
-Publishing and release reconciliation remain explicitly disabled. The GHCR migration
-prepares publishing, trusted image verification and private cluster pulls; the shared
-builder is now reviewed at ba41b7532a626ba47e9bf7b74ba56c4a6808228a and its caller
-updates and GitOps allowlist change still need review/merge before activation.
-ECR Terraform roots remain inactive reference scaffolding. Do not run AWS apply for
-this local architecture.
-GitHub release/observer Apps still need configuration, and real image signing, promotion,
-checkout, rollback and notification exercises remain activation work.
+Shared Argo CD now registers `narx-local` with a dedicated credential limited to
+commerce-dev, commerce-qa and commerce-production. All three Applications point there.
+Their release files remain empty bootstraps: Synced/Healthy does not mean the storefront
+is deployed. Operator-created access Roles cause two harmless orphan warnings until the
+specific bootstrap exceptions in the GitOps activation follow-up are reviewed/applied.
+
+Dedicated release and observer Apps are installed and validated. Private registry pull
+credentials are prepared in all three namespaces. Source build/test/security checks pass.
+Initial source publication was enabled while GitOps reconciliation stayed disabled, but
+the first publication jobs are waiting at the legacy registry-release environment gate.
+No private image publication or real application release is claimed yet. The follow-up
+removes that unnecessary image gate and moves release keys to main-only gitops-release
+secrets; repository copies must be removed only after the reviewed caller cutover.
+
+Original Boutique's app/monitoring workloads and Jenkins are temporarily paused with
+user approval to free memory. Its PVC identities and original settings are retained;
+shared Argo CD and its cluster stay running. Independent Narx monitoring, real signed
+release/promotion, checkout, rollback, backups and notification exercises remain work.
+ECR Terraform roots are inactive reference code. This setup creates no AWS resources.
 
 The organisation uses GitHub Free and all six repositories are public. GitHub now
 enforces `main` branch protection: PRs, one CODEOWNER approval, the repository's CI
@@ -216,16 +225,17 @@ CI scans again. This evidence does not replace live GHCR/signature or Argo tests
 
 ### GitHub Apps and activation settings
 
-Narx Commerce needs its own release and observer identities. The installed App named
+Narx Commerce now has its own release and observer identities. The steps below also
+serve as a rebuild runbook; do not create duplicate Apps when these already exist. The installed App named
 `narx-commerce-release` (ID 5541020) is already used by the separate commerce-aws project;
 its key must not be repurposed for this project. Create/install separate Apps for these
 repositories, with webhooks disabled because dispatch/polling and Argo notifications
 already supply the necessary communication paths.
 
-| Identity | Suggested name | Repository permissions | Private-key destination |
+| Identity | Installed App | Repository permissions | Private-key destination |
 | --- | --- | --- | --- |
-| Release automation | narx-local-commerce-release | Contents read/write, Pull requests read/write, Metadata read | NARX_RELEASE_APP_PRIVATE_KEY in frontend, catalogue, orders and platform-gitops |
-| Deployment evidence | narx-local-commerce-observer | Commit statuses read/write, Metadata read | argocd-notifications-secret/narx-github-privateKey via the helper |
+| Release automation | narx-local-commerce-release (App 5613524, installation 178600148) | Contents read/write, Pull requests read/write, Metadata read | NARX_RELEASE_APP_PRIVATE_KEY in the main-only gitops-release environment of the three app repos and GitOps |
+| Deployment evidence | narx-local-commerce-observer (App 5613724, installation 178604312) | Commit statuses read/write, Metadata read | argocd-notifications-secret/narx-github-privateKey via the helper |
 
 Install on platform-gitops only while source repositories remain public. Private source
 repositories would need explicitly scoped source Contents/Actions read access as well.
@@ -240,12 +250,25 @@ identifiers; the key is secret.
 | Three application repos | NARX_RELEASE_APP_ID, NARX_RELEASE_APP_PRIVATE_KEY secret, DELIVERY_ENABLED=false until ready |
 | platform-gitops | Same release App ID/key, NARX_DEPLOYMENT_BOT_LOGIN for the observer, DELIVERY_ENABLED=false until ready |
 
-Main-only GitHub environments remain registry-release for application publication and
-registry-verification for release policy. Callers must explicitly grant packages:write
-to the reusable service job; its untrusted build job overrides that with contents:read
-only. The main publisher receives packages:write and signing id-token:write. GitOps
-verification receives packages:read and no AWS OIDC permissions. No AWS account ID,
-role or ECR login is needed for these workflows.
+The target boundary uses a main-only `gitops-release` environment for the App key.
+Both source notification jobs and the GitOps reconciler use it. Image publication uses
+only the ephemeral GITHUB_TOKEN and a main-only job guard; read-only trusted verification
+uses only its package token. Neither needs an AWS-era deployment environment. The old
+registry-release gate is currently blocking initial publication; the boundary fix and
+caller pins must be reviewed before treating this target behavior as active.
+
+An App key at repository scope can be referenced by same-repository PR workflows.
+Protected environment scope prevents that: select only main in deployment branch rules,
+store NARX_RELEASE_APP_PRIVATE_KEY in that environment, and remove its repository copy
+after the new caller is active. A caller must pass the **same secret name**; the job in
+the reusable workflow declares the environment and receives its value. Passing an empty
+repository-level expression is supported when the matching environment secret exists.
+Do not alias it to a different name or pass every repository secret with inherit.
+
+Callers grant packages:write to the reusable service job; its build job overrides that
+with contents:read only. The main publisher receives packages:write and signing
+id-token:write. Trusted verification receives packages:read and never executes candidate
+PR code. No AWS account ID, role or ECR login is needed by these delivery workflows.
 
 #### GHCR package permissions and local pulls
 
@@ -283,12 +306,25 @@ revoking the previous token. The file permission check prevents accidentally rea
 world/group-readable token file, but the operator must choose its actual scope correctly.
 Revoking a token does not remove already cached images or stop running pods.
 
-Keep all four DELIVERY_ENABLED flags false until the shared builder is reviewed/pinned,
-package permissions and Narx Apps are configured, and the dedicated cluster is ready.
-Enabling a variable does not publish old commits retroactively. Merge a reviewed caller
-update to build all initial components, then verify four completed main release records
-before expecting an initial dev PR. Do not claim private GHCR pulls/signatures were
-live-tested merely because offline tests or workflow lint passed.
+First-time private package setup has a deliberate sequence:
+
+1. Merge/pin the reviewed workflows and configure dedicated release/observer identities.
+   Keep GitOps DELIVERY_ENABLED=false so an incomplete first bundle cannot deploy.
+2. Enable DELIVERY_ENABLED=true in the three application repositories. Merge a reviewed
+   caller change or explicitly rerun current trusted main CI. This builds/scans the real
+   runtime, publishes/signs it, and records source releases; it does not need a live cluster.
+3. Once all four private packages exist, grant platform-gitops Actions Read access to
+   each package. Package access cannot be configured before the package is created.
+4. Verify the source workflows fully succeeded, four source release records exist, and
+   private pull credentials work. Enable GitOps DELIVERY_ENABLED=true and reconcile.
+5. Review the real dev release PR, merge only after checks, and verify the deployment.
+   Trusted dev status permits QA, then verified QA permits a reviewed production PR.
+
+A flag change alone does not publish older completed runs. A main CI rerun is an explicit
+publication operation; no fake application change is needed. Do not describe image
+signatures/private pulls as tested merely because lint or mocked tests passed. At this
+snapshot the three source flags are enabled and GitOps is still disabled, with the
+legacy image environment gate awaiting the reviewed workflow correction.
 
 The delivery/ Terraform root still contains ECR/IAM scaffolding from the retired AWS
 plan. It is inactive reference code and is not applied for this local architecture.
@@ -302,22 +338,22 @@ production on its own kind cluster, `narx-commerce`, with context
 management plane. Sharing Argo CD does not share application databases, namespaces,
 monitoring storage, runtime credentials or release pipelines.
 
-This migration is staged. The old `commerce-dev` and `commerce-qa` namespaces currently
-exist in `kind-mega-local`, but contain no app pods or PVCs. Their Synced/Healthy Argo
-status refers to empty bootstrap releases, not working applications. Shared Boutique
+This migration is staged. The old commerce-dev/qa namespaces still exist in
+kind-mega-local without app pods/PVCs. The three Argo Applications are now retargeted
+to the separate Narx cluster, but their healthy sync still refers to empty bootstraps. Shared Boutique
 monitoring still contains the earlier Narx integration until the independent Narx
 monitoring deployment is verified. No old resources are deleted by the bootstrap helper.
 
 | Item | Target | Activation status |
 | --- | --- | --- |
-| Cluster | One dedicated kind node, pinned Kubernetes v1.34.0 image | Creation is an explicit operator command after review |
+| Cluster | One dedicated kind node, pinned Kubernetes v1.34.0 image | Created and Ready; Cilium/CoreDNS healthy |
 | Argo CD | Existing installation in `kind-mega-local` | Already running; keep its host cluster on |
-| Workload AppProject | `narx-commerce-local`, Narx GitOps repository only | Reviewed manifest must be applied after cluster registration |
-| Registered destination | `narx-local`, only three commerce namespaces | Bootstrap creates a dedicated namespace-scoped service account |
-| Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Separate generated credentials and data volumes |
-| Publishing/verification | Private GHCR with ephemeral CI tokens | Publisher merged; callers, Apps and package access still needed |
+| Workload AppProject | `narx-commerce-local`, Narx GitOps repository only | Applied to shared Argo CD |
+| Registered destination | `narx-local`, only three commerce namespaces | Registered; positive workload and negative cluster/system-secret RBAC checks passed |
+| Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Namespaces and independent runtime/pull secrets prepared; real workloads pending |
+| Publishing/verification | Private GHCR with ephemeral CI tokens | Source checks passed; publication currently waits at a legacy environment gate |
 | Monitoring | Dedicated Narx stack on the Narx cluster | Pending; do not copy the Boutique monitoring Application |
-| Notifications | Narx-owned webhook and observer key in shared Argo | Configure only after credentials are supplied |
+| Notifications | Separate observer key in shared Argo | GitHub observer configured; dedicated Narx Slack replacement/live message proof pending |
 
 The 7.5 GiB laptop cannot safely run both complete projects and three full Narx
 environments at once. The cluster definition uses a single node to limit control-plane
@@ -906,5 +942,6 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [Argo CD GitHub deployment statuses](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/github/)
 - [GHCR authentication and package access](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 - [Cilium installation on kind](https://docs.cilium.io/en/stable/installation/kind/)
+- [Protected environment secrets in reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 - [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
