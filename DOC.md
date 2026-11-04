@@ -18,10 +18,12 @@ releases on `kind-mega-local`; they are not working storefront deployments. Shar
 monitoring still includes the old Narx integration until an independent Narx stack is
 ready. Existing Boutique applications and data are not migration targets.
 
-Publishing and release reconciliation remain explicitly disabled. ECR-specific workflows
-and Terraform in this repository are legacy scaffolding pending a separate reviewed GHCR
-migration. Do not run AWS apply or enable delivery to activate this local architecture.
-The detailed ECR explanations below describe existing inactive code, not the new target.
+Publishing and release reconciliation remain explicitly disabled. The GHCR migration
+prepares publishing, trusted image verification and private cluster pulls; the shared
+builder is now reviewed at ba41b7532a626ba47e9bf7b74ba56c4a6808228a and its caller
+updates and GitOps allowlist change still need review/merge before activation.
+ECR Terraform roots remain inactive reference scaffolding. Do not run AWS apply for
+this local architecture.
 GitHub release/observer Apps still need configuration, and real image signing, promotion,
 checkout, rollback and notification exercises remain activation work.
 
@@ -103,62 +105,52 @@ microservices; any later split must be an explicit, tested architecture change.
 
 ## CI and CD: what happens after a push
 
-**Migration note:** this describes the existing disabled ECR delivery implementation.
-The build/review/promotion concepts remain; GHCR publishing and verification must replace
-AWS-specific steps before this local delivery path is activated.
+An image is the sealed output of a tested build. Its digest identifies its contents.
+Dev, QA and production receive the same image; rebuilding per environment would create
+a different release and invalidate earlier verification. The GHCR migration is prepared
+but delivery remains off until reviewed builder pins, package access and Apps are ready.
 
-Think of an image as a sealed delivery box. Its digest identifies the exact contents.
-Dev, QA and production receive the same box; rebuilding for each environment would
-create a different release and invalidate earlier verification.
+1. A developer opens a feature PR. Workflow lint/secret scanning run first. Component
+   Docker builds run service tests through the runtime target, verify the non-root user,
+   scan dependencies and generate an SBOM. Unfixed HIGH/CRITICAL findings also block.
+   PR build jobs have contents:read only; no registry publication or release App key.
+2. CODEOWNER approval and required checks are needed before merging to protected main.
+   The merged commit is checked again. Changed components build; Orders/cart can run in
+   parallel. Documentation-only changes skip image work while reporting the required check.
+3. With DELIVERY_ENABLED=true, a main-only publisher downloads that run's exact tested
+   image artifact. Its short-lived GITHUB_TOKEN receives packages:write and publishes
+   `ghcr.io/narx-space-prod/commerce-COMPONENT:COMMIT`. It does not rebuild. It refuses
+   a commit tag pointing to another image, reuses a matching image, and checks the final
+   manifest config against the tested image. Authentication/outages fail closed.
+4. GitHub OIDC gives Cosign a signing identity; it is not an AWS login. The publisher
+   signs the digest and attests source provenance plus SBOM. Temporary registry login
+   files are removed. GHCR permits tag mutation at the registry level, so deployment
+   identity and verification use the digest, never a mutable tag such as latest.
+5. The caller publishes a source release record only after its component jobs succeed.
+   A separate release App requests GitOps reconciliation; scheduled reconciliation can
+   recover a missed dispatch. Incomplete/failed main CI records do not qualify.
+6. The GitOps verifier accepts only four exact Narx GHCR image paths, verifies source
+   main CI, approved shared builder SHA, source commit, signature/provenance/SBOM and
+   digest binding. All four components form the initial bundle. It opens a dev PR;
+   it does not write directly to main. Trusted PR verification executes base code only
+   and treats candidate release JSON as data.
+7. After human review/merge, shared Argo CD applies dev on the separately registered
+   Narx cluster and waits for health plus its PostSync smoke Job. A status-only observer
+   App reports narx/deploy-dev for that GitOps revision. This evidence is needed before
+   proposing QA with the same digests, then production after verified QA.
+8. Dev, QA and production release PRs all require review under current protection. No
+   automatic approval/bypass is configured. Production now targets commerce-production
+   on narx-local, not AWS. QA/production frontend analysis protects the traffic switch.
+   Failed desired state can propose a reviewed rollback; it never reverses database data.
 
-1. Create a feature branch, push it and open a PR. Workflow lint and secret scanning
-   run first. Component builds then run tests inside their Docker stages, check the
-   non-root runtime, scan OS/application dependencies and generate a CycloneDX SBOM.
-   HIGH and CRITICAL findings, including unfixed findings, block the build. PR builds
-   receive read-only tokens; they never receive AWS credentials or the release key.
-2. An independent CODEOWNER approves and required checks pass before squash merge.
-   Changes dismiss stale reviews. Main runs the same checks again on the merged commit.
-3. When `DELIVERY_ENABLED=true`, the trusted publisher downloads the exact image
-   produced by the successful build. It does not rebuild it. GitHub OIDC assumes a
-   repository-specific AWS role through the main-only `registry-release` environment.
-   It pushes an immutable commit tag to ECR, then signs the digest and attaches signed
-   source provenance and an SBOM with Cosign. A conflicting existing tag fails.
-4. Only after all caller jobs succeed, a release record is published and the release
-   App requests GitOps reconciliation. A five-minute scheduled reconciliation also
-   recovers missed notifications. Records from incomplete/failed main CI do not qualify.
-5. GitOps verifies source CI, the permitted builder revision, caller repository/main
-   identity, source SHA, digest, provenance and SBOM. All four component identities
-   form one release bundle. Initial dev waits until every component is available.
-   Reconciliation opens a dev PR; it does not write directly to main.
-6. After approval and merge, local Argo CD pulls the dev desired state. It deploys the
-   umbrella chart, waits for readiness, then runs the PostSync smoke Job. A separate
-   observer App publishes `narx/deploy-dev` status for that GitOps revision.
-7. A trusted successful dev status permits a QA PR carrying the exact same four image
-   digests. Successful QA permits a production PR. **All three environment PRs require
-   human review under the current protection rules. No automatic QA merge or approval
-   bypass is configured.** A different policy would need a separate reviewed change.
-8. The reviewed local ApplicationSet targets `narx-local` for production as well.
-   Apply its registration and manifest after review; AWS production manifests are retired.
+Main image-transfer artifacts live one day and security evidence fourteen days. BuildKit
+caches avoid duplicate test-image builds. Separate main-commit concurrency groups avoid
+cancelling an earlier publication when a newer commit arrives.
 
-Documentation-only changes skip image work while the required build check still reports
-success. In the Orders repository, cart-only changes skip the Java build and Java-only
-changes skip cart. Orders and cart builds run in parallel after workflow/secret checks.
-BuildKit caches avoid separate test-image builds. Security evidence is retained for
-14 days; temporary main image-transfer artifacts for one day. Main runs use separate
-commit concurrency groups, so a newer push cannot cancel an older release build.
-
-`platform-ci` owns five reusable workflows: workflow/secret validation, application
-build/publish, release notification, Helm validation and Terraform validation. Service
-repositories contain short callers. GitOps has ordinary CI, a reconciler, and a trusted
-release verifier. This separation keeps privileged verification away from candidate code.
-The verifier uses `pull_request_target` but checks out only the reviewed base commit;
-PR release JSON is fetched as data and never executed. Enable its required status only
-once the verifier is on main and has reported successfully on a subsequent PR.
-
-Reusable workflows and actions are pinned by commit SHA. Merge shared workflow changes
-first, then update callers to the merged revision. The allowed builder list lives in
-`platform-gitops/policy/builders.json`; retain old trusted builder SHAs while retained
-releases still depend on them. An arbitrary service commit cannot change that allowlist.
+Reusable workflows and actions are pinned by SHA. Merge platform-ci first, then pin
+service callers and policy/builders.json to its reviewed main revision. Do not trust an
+unmerged builder branch. The GitOps candidate verifier does not check out PR scripts,
+even though pull_request_target has privileges to publish its status.
 
 ### Rollback and failure behaviour
 
@@ -193,7 +185,7 @@ responses; a temporary real Git remote also tests updating an existing PR branch
 
 `platform-infrastructure/local/bootstrap.py` handles local operator setup: namespace
 and initial credentials for all three environments, restricted remote registration,
-legacy ECR pull credentials, and observer/notification configuration. It does not provision AWS. The existing
+private GHCR pull credentials, and observer/notification configuration. It does not provision AWS. The existing
 `tests/test_local_stack.py` exercises the complete disposable app. These scripts have
 different trust boundaries and are kept separate rather than being copied into jobs.
 
@@ -220,58 +212,87 @@ The delivery root uses mocked plans only. The disposable full integration run on
 patched Orders, cart and catalogue images passed in 167.8 seconds, including queue
 outage, duplicate, worker transaction rollback and DLQ recovery. Local image scans
 reported zero HIGH/CRITICAL findings at that run; vulnerability databases change, so
-CI scans again. This evidence does not replace live ECR/OIDC/signature or Argo tests.
+CI scans again. This evidence does not replace live GHCR/signature or Argo tests.
 
 ### GitHub Apps and activation settings
 
-The App permission model below remains relevant. The AWS variables, ECR roles and
-12-hour pull-token flow are inactive legacy implementation, to be replaced by GHCR.
-Do not create cloud resources for the dedicated local-cluster bootstrap.
+Narx Commerce needs its own release and observer identities. The installed App named
+`narx-commerce-release` (ID 5541020) is already used by the separate commerce-aws project;
+its key must not be repurposed for this project. Create/install separate Apps for these
+repositories, with webhooks disabled because dispatch/polling and Argo notifications
+already supply the necessary communication paths.
 
-Create Apps from organisation Settings → Developer settings → GitHub Apps. Disable
-webhooks when creating these Apps; polling/dispatch does not require an inbound server.
-Give each a descriptive homepage, for example the organisation URL. Install only on
-`platform-gitops`, not on all repositories, and generate separate private keys.
-
-| Identity | Suggested App name | Repository permissions | Where its private key goes |
+| Identity | Suggested name | Repository permissions | Private-key destination |
 | --- | --- | --- | --- |
-| Release automation | `narx-space-prod-release` | Contents read/write, Pull requests read/write, Metadata read | GitHub Actions secret `NARX_RELEASE_APP_PRIVATE_KEY` in three application repos and GitOps |
-| Deployment evidence | `narx-space-prod-deployments` | Commit statuses read/write, Metadata read | `argocd-notifications-secret`, key `narx-github-privateKey` |
+| Release automation | narx-local-commerce-release | Contents read/write, Pull requests read/write, Metadata read | NARX_RELEASE_APP_PRIVATE_KEY in frontend, catalogue, orders and platform-gitops |
+| Deployment evidence | narx-local-commerce-observer | Commit statuses read/write, Metadata read | argocd-notifications-secret/narx-github-privateKey via the helper |
 
-Source release/build metadata is currently read from public application repositories.
-If they become private, the release verifier needs separately scoped source read access
-(Contents and Actions read); update the App installation and test that change first.
-The release App cannot approve its own PR or bypass main rules. The observer cannot
-write repository contents or PRs. Keep PEM files outside all repositories, with mode
-600. Never paste keys into chat or commit them. App ID, installation ID and bot login
-are public identifiers; the private key is the secret. The observer login is normally
-`<app-slug>[bot]`. Use the organisation's new Apps rather than the older Boutique App.
+Install on platform-gitops only while source repositories remain public. Private source
+repositories would need explicitly scoped source Contents/Actions read access as well.
+The release App can open/update PRs but cannot approve its own PR or bypass main rules.
+The observer cannot modify code or open PRs. Store private keys outside repositories;
+enter Actions secret values directly in GitHub or use gh secret set from the private
+file. Never paste PEM contents in chat. App ID, installation ID and bot login are public
+identifiers; the key is secret.
 
-Configure these repository variables after AWS review:
-
-| Repositories | Variables |
+| Repositories | Variables and secrets |
 | --- | --- |
-| All three application repos | `AWS_ACCOUNT_ID`, `AWS_REGION`, per-repo `AWS_RELEASE_ROLE_ARN`, `NARX_RELEASE_APP_ID`, `DELIVERY_ENABLED` |
-| GitOps | `AWS_ACCOUNT_ID`, `AWS_REGION`, `AWS_VERIFICATION_ROLE_ARN`, `NARX_RELEASE_APP_ID`, `NARX_DEPLOYMENT_BOT_LOGIN`, `DELIVERY_ENABLED` |
+| Three application repos | NARX_RELEASE_APP_ID, NARX_RELEASE_APP_PRIVATE_KEY secret, DELIVERY_ENABLED=false until ready |
+| platform-gitops | Same release App ID/key, NARX_DEPLOYMENT_BOT_LOGIN for the observer, DELIVERY_ENABLED=false until ready |
 
-Main-only GitHub environments are `registry-release` for application repositories and
-`registry-verification` for GitOps. Terraform trusts those exact environment subjects
-and the STS audience. PR build jobs explicitly remove OIDC permission even though the
-trusted publishing job needs it. ECR mutation is limited to the owning component repos;
-the GitOps role can read images and signatures but cannot publish/delete them.
+Main-only GitHub environments remain registry-release for application publication and
+registry-verification for release policy. Callers must explicitly grant packages:write
+to the reusable service job; its untrusted build job overrides that with contents:read
+only. The main publisher receives packages:write and signing id-token:write. GitOps
+verification receives packages:read and no AWS OIDC permissions. No AWS account ID,
+role or ECR login is needed for these workflows.
 
-`delivery/` defines the four ECR repositories, OIDC and scoped IAM roles. It does not
-create EKS, databases or a backend yet. Configure remote state before real application.
-Repositories use strict immutable tags, encryption, scan-on-push and destruction
-protection. An untagged-only lifecycle rule expires after 14 days. Tagged releases are
-retained for rollback, so storage can grow and requires a later live-reference-aware
-retention review. ECR storage is billable; image transfer can also cost money.
+#### GHCR package permissions and local pulls
 
-Do not enable publishing until AWS roles/ECR, release App secrets and GitOps verification
-are ready. Then enable GitOps and application `DELIVERY_ENABLED` in a planned session
-and merge a reviewed application/workflow change that builds all initial components.
-Simply toggling the variable does not retroactively publish earlier images. Confirm
-four successful main release records before expecting the first dev PR.
+The selected setup uses private GHCR packages. First GHCR publication defaults to
+private even when the repository is public; retain that visibility for all four images.
+The four image packages are commerce-frontend, commerce-catalogue, commerce-orders and
+commerce-cart under Narx-Space-Prod. The source label links each image to its source
+repository, including cart to commerce-orders. An existing package created under a
+different owner/repository must grant the publishing repository access explicitly.
+
+For each private package, grant **platform-gitops** Read access in package Settings ->
+Manage Actions access. This permits its ephemeral GITHUB_TOKEN to verify images and
+Cosign evidence. Installation tokens from the release App are not registry credentials.
+CI can publish with GITHUB_TOKEN; do not create a write:packages PAT for CI.
+
+Kubernetes has no GitHub workflow token. Create a separate classic PAT with only
+read:packages using a Narx-authorized operator identity, an intentional expiry and no
+write/delete package permissions. Store it in a mode-600 private file outside all
+repositories. This is a local registry pull credential, distinct from the release App
+key, GitHub signing identity and environment database passwords. The helper transfers
+it to the dedicated Narx cluster's ghcr-pull Secret via stdin without printing it.
+
+```bash
+# Supply the actual owner/file path. Do not put the token in command arguments.
+python3 local/bootstrap.py refresh-registry --context kind-narx-commerce --environment dev \
+  --registry-user YOUR_GITHUB_LOGIN --registry-token-file /secure/path/narx-ghcr-read-token
+python3 local/bootstrap.py refresh-registry --context kind-narx-commerce --environment qa \
+  --registry-user YOUR_GITHUB_LOGIN --registry-token-file /secure/path/narx-ghcr-read-token
+python3 local/bootstrap.py refresh-registry --context kind-narx-commerce --environment production \
+  --registry-user YOUR_GITHUB_LOGIN --registry-token-file /secure/path/narx-ghcr-read-token
+```
+
+Rotate before token expiry; update all three Secrets and verify a new pod can pull before
+revoking the previous token. The file permission check prevents accidentally reading a
+world/group-readable token file, but the operator must choose its actual scope correctly.
+Revoking a token does not remove already cached images or stop running pods.
+
+Keep all four DELIVERY_ENABLED flags false until the shared builder is reviewed/pinned,
+package permissions and Narx Apps are configured, and the dedicated cluster is ready.
+Enabling a variable does not publish old commits retroactively. Merge a reviewed caller
+update to build all initial components, then verify four completed main release records
+before expecting an initial dev PR. Do not claim private GHCR pulls/signatures were
+live-tested merely because offline tests or workflow lint passed.
+
+The delivery/ Terraform root still contains ECR/IAM scaffolding from the retired AWS
+plan. It is inactive reference code and is not applied for this local architecture.
+AWS infrastructure learning belongs to commerce-aws, not Narx Commerce.
 
 ### Dedicated local cluster and shared Argo CD
 
@@ -294,7 +315,7 @@ monitoring deployment is verified. No old resources are deleted by the bootstrap
 | Workload AppProject | `narx-commerce-local`, Narx GitOps repository only | Reviewed manifest must be applied after cluster registration |
 | Registered destination | `narx-local`, only three commerce namespaces | Bootstrap creates a dedicated namespace-scoped service account |
 | Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Separate generated credentials and data volumes |
-| Publishing/verification | GHCR target | ECR implementation remains disabled; migration is pending |
+| Publishing/verification | Private GHCR with ephemeral CI tokens | Publisher merged; callers, Apps and package access still needed |
 | Monitoring | Dedicated Narx stack on the Narx cluster | Pending; do not copy the Boutique monitoring Application |
 | Notifications | Narx-owned webhook and observer key in shared Argo | Configure only after credentials are supplied |
 
@@ -317,12 +338,9 @@ free -h
 docker stats --no-stream
 kind get clusters
 # Run once if narx-commerce does not already exist. No AWS service is contacted.
-kind create cluster --name narx-commerce --config local/kind.yaml --wait 120s
+kind create cluster --name narx-commerce --config local/kind.yaml --wait 0s
 kubectl --context kind-narx-commerce get nodes -o wide
 kubectl --context kind-narx-commerce get storageclass
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment dev
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment qa
-python3 local/bootstrap.py prepare --context kind-narx-commerce --environment production
 ```
 
 The API host port listens only on loopback. Both local clusters use Docker's kind
@@ -331,17 +349,42 @@ stable container DNS rather than the laptop's changing LAN IP. Independent clust
 can use overlapping pod/service CIDRs here because only their API endpoints are crossed.
 This arrangement is for one host; it is not routing between production VPCs.
 
-Kind's default kindnet does **not** enforce Kubernetes NetworkPolicies. Install and
-verify an enforcing CNI before treating the policy YAML as a security boundary or
-activating untrusted workloads. Cluster separation alone does not isolate Docker hosts.
-`local/kind.yaml` deliberately describes the current bootstrap capability rather than
-claiming a CNI installation it does not perform.
+The definition disables kindnet so Cilium can be installed as the policy-enforcing CNI.
+The node and CoreDNS are expected to remain NotReady/Pending until the next step;
+kind creation must not wait for network readiness before installing the network plugin.
+The Cilium configuration keeps kind's kube-proxy and Kubernetes pod CIDR allocation,
+uses one operator replica, and disables optional Hubble/Envoy DaemonSets for capacity.
+Cluster separation does not isolate the shared Docker host. NetworkPolicy enforcement
+must still be verified live against the actual application rules before activation.
 
 #### 2. Install platform prerequisites on the remote cluster
 
-The shared Argo CD workload credential cannot create CRDs or ClusterRoles. Install
-Rollouts CRDs as an operator before deploying QA/production. The release manifest is
-checksum-locked in the GitOps repository; do not install its cluster-wide controller
+Platform bootstrap is an operator action with an explicit Narx kube context. The
+shared Argo workload credential cannot install the CNI, CRDs or ClusterRoles. Cilium
+is version-pinned and the downloaded chart archive is checksum-verified in CI and here.
+No cluster changes occur during the CI lint/template checks.
+
+```bash
+mkdir -p /tmp/narx-cilium
+helm pull oci://quay.io/cilium/charts/cilium --version 1.20.4 --destination /tmp/narx-cilium
+printf '%s  %s\n' \
+  505abff8385811df1a949776fc42e9f10697989a332acc86d6e8933efcb855ed \
+  /tmp/narx-cilium/cilium-1.20.4.tgz | sha256sum --check --strict
+helm upgrade --install cilium /tmp/narx-cilium/cilium-1.20.4.tgz \
+  --kube-context kind-narx-commerce --namespace kube-system \
+  -f local/cilium-values.yaml --wait --timeout 5m
+kubectl --context kind-narx-commerce wait --for=condition=Ready nodes --all --timeout=180s
+kubectl --context kind-narx-commerce -n kube-system rollout status deployment/coredns --timeout=180s
+kubectl --context kind-narx-commerce -n kube-system exec daemonset/cilium -- cilium-dbg status --brief
+```
+
+These status checks prove basic networking readiness, not application policy behavior.
+Verify that allowed service dependencies work and unauthorized cross-environment traffic
+fails before enabling releases. Do not uninstall the CNI on a live workload cluster;
+change its reviewed values/version and use the upgrade procedure.
+
+Install Rollouts CRDs as an operator before deploying QA/production. The release manifest
+is checksum-locked in the GitOps repository; do not install its cluster-wide controller
 because the application chart owns namespace-scoped controllers.
 
 ```bash
@@ -363,12 +406,16 @@ PYTHON
 kubectl --context kind-narx-commerce get crd rollouts.argoproj.io analysisruns.argoproj.io
 ```
 
-An enforcing CNI, metrics-server for any enabled HPAs, and independently owned monitoring
-are remaining platform activation tasks. The configuration above does not install them.
+Live Cilium/policy verification, metrics-server for any enabled HPAs, and independently
+owned monitoring remain platform activation tasks. Linting/rendering Cilium in CI does
+not install it or prove enforcement on the laptop.
 
 #### 3. Register only Narx workload namespaces in shared Argo CD
 
 ```bash
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment dev
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment qa
+python3 local/bootstrap.py prepare --context kind-narx-commerce --environment production
 python3 local/bootstrap.py register-cluster \
   --context kind-narx-commerce --management-context kind-mega-local
 # Check the remote identity has only the intended namespace access.
@@ -824,12 +871,12 @@ release records identify their repository and digest.
 ## Remaining implementation milestones
 
 1. Review and merge dedicated-cluster bootstrap and local Argo destination changes.
-   Check laptop capacity before creating the node. Install an enforcing CNI and required
-   CRDs, prepare the namespaces, register the restricted workload identity, and retarget
+   Check laptop capacity before creating the node. Install the pinned Cilium CNI and
+   required CRDs, verify networking, prepare namespaces, register the identity, and retarget
    only the empty Narx Applications. Keep Boutique workloads and shared Argo CD intact.
-2. Replace disabled ECR publishing/verification with GHCR, retaining digest identities,
-   signing/provenance/SBOM checks, CODEOWNER review and trusted deployment evidence.
-   Configure separate Narx release/observer Apps, then enable delivery deliberately.
+2. Merge the GHCR publisher first; pin callers and the GitOps builder allowlist to its
+   final reviewed main SHA. Configure package access and separate Narx release/observer
+   Apps, then enable delivery deliberately.
 3. Publish all four real component images and exercise dev -> QA -> local production
    with the same digests. Verify failed preview/post-switch recovery and reviewed
    rollback. No fake or mutable image references may activate a release.
@@ -857,5 +904,7 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [AWS Java SDK default credential chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html)
 
 - [Argo CD GitHub deployment statuses](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/github/)
-- [ECR pricing](https://aws.amazon.com/ecr/pricing/)
+- [GHCR authentication and package access](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+- [Cilium installation on kind](https://docs.cilium.io/en/stable/installation/kind/)
+- [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)

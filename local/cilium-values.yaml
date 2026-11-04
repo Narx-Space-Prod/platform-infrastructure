@@ -1,0 +1,20 @@
+# Cilium chart 1.20.4; archive SHA256 is verified in CI and the operator guide.
+# Keep kind's kube-proxy; use Kubernetes-assigned pod CIDRs.
+kubeProxyReplacement: false
+ipam:
+  mode: kubernetes
+image:
+  pullPolicy: IfNotPresent
+operator:
+  replicas: 1
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {cpu: 1000m, memory: 512Mi}
+# L3/L4 NetworkPolicy enforcement does not require a Hubble UI or Envoy DaemonSet.
+hubble:
+  enabled: false
+envoy:
+  enabled: false
