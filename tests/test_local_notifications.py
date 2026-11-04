@@ -1,5 +1,4 @@
 """No real cluster or Slack calls: credential scope and config preservation checks."""
-import base64
 import contextlib
 import importlib.util
 import io
@@ -21,6 +20,8 @@ class DeliveryNotifications(unittest.TestCase):
         self.service='url: $narx-slack-webhook\nheaders: []\n'
         self.file.write_text(json.dumps({'data':{'service.webhook.slack':self.service,'trigger.narx-slack-deployed':'fixture','template.narx-slack-deployed':'fixture','trigger.narx-healthy':'github-only'}}))
         self.webhook='https://hooks.slack.com/services/unit-test-placeholder'
+        self.webhook_file=Path(self.directory.name)/'slack-webhook'
+        self.webhook_file.write_text(self.webhook)
         self.current={'data':{'service.slack':'token: $existing-token'}}
         self.calls=[]
 
@@ -28,17 +29,18 @@ class DeliveryNotifications(unittest.TestCase):
         self.calls.append((args,input))
         if 'get' in args:
             if 'configmap' in args:return json.dumps(self.current)
-            if 'monitoring' in args:return json.dumps({'data':{'slack_webhook':base64.b64encode(self.webhook.encode()).decode(),'grafana_password':base64.b64encode(b'unrelated').decode()}})
+            if 'monitoring' in args:raise AssertionError('Must not read Boutique credentials')
             return 'secret/argocd-notifications-secret'
         return 'patched'
 
     def execute(self):
-        argv=['bootstrap.py','configure-delivery-notifications','--context','kind-mega-local','--notifications-file',str(self.file)]
+        self.webhook_file.write_text(self.webhook)
+        argv=['bootstrap.py','configure-delivery-notifications','--context','kind-mega-local','--notifications-file',str(self.file),'--slack-webhook-file',str(self.webhook_file)]
         with patch.object(sys,'argv',argv),patch.object(b,'command',side_effect=self.command),contextlib.redirect_stdout(io.StringIO()) as output,contextlib.redirect_stderr(io.StringIO()):
             b.main()
         return output.getvalue()
 
-    def test_only_slack_key_is_transferred_via_stdin_and_legacy_config_is_preserved(self):
+    def test_independent_slack_key_uses_stdin_and_shared_config_is_preserved(self):
         output=self.execute()
         self.assertNotIn(self.webhook,output)
         for args,_ in self.calls:self.assertNotIn(self.webhook,' '.join(args))
