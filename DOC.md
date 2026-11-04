@@ -19,8 +19,9 @@ monitoring still includes the old Narx integration until an independent Narx sta
 ready. Existing Boutique applications and data are not migration targets.
 
 Publishing and release reconciliation remain explicitly disabled. The GHCR migration
-prepares publishing, trusted image verification and private cluster pulls; the final
-reviewed builder SHA must still be pinned in callers and GitOps before activation.
+prepares publishing, trusted image verification and private cluster pulls; the shared
+builder is now reviewed at ba41b7532a626ba47e9bf7b74ba56c4a6808228a and its caller
+updates and GitOps allowlist change still need review/merge before activation.
 ECR Terraform roots remain inactive reference scaffolding. Do not run AWS apply for
 this local architecture.
 GitHub release/observer Apps still need configuration, and real image signing, promotion,
@@ -248,8 +249,8 @@ role or ECR login is needed for these workflows.
 
 #### GHCR package permissions and local pulls
 
-The prepared workflow supports private packages. Visibility is an owner decision;
-first GHCR publication defaults to private even when the repository is public.
+The selected setup uses private GHCR packages. First GHCR publication defaults to
+private even when the repository is public; retain that visibility for all four images.
 The four image packages are commerce-frontend, commerce-catalogue, commerce-orders and
 commerce-cart under Narx-Space-Prod. The source label links each image to its source
 repository, including cart to commerce-orders. An existing package created under a
@@ -281,10 +282,6 @@ Rotate before token expiry; update all three Secrets and verify a new pod can pu
 revoking the previous token. The file permission check prevents accidentally reading a
 world/group-readable token file, but the operator must choose its actual scope correctly.
 Revoking a token does not remove already cached images or stop running pods.
-
-If the owner explicitly selects public images, change package visibility in GitHub and
-set global.imagePullSecrets: [] in reviewed environment runtime values. Anonymous pulls
-then work; do not store a PAT unnecessarily. Publication still requires the workflow token.
 
 Keep all four DELIVERY_ENABLED flags false until the shared builder is reviewed/pinned,
 package permissions and Narx Apps are configured, and the dedicated cluster is ready.
@@ -318,7 +315,7 @@ monitoring deployment is verified. No old resources are deleted by the bootstrap
 | Workload AppProject | `narx-commerce-local`, Narx GitOps repository only | Reviewed manifest must be applied after cluster registration |
 | Registered destination | `narx-local`, only three commerce namespaces | Bootstrap creates a dedicated namespace-scoped service account |
 | Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Separate generated credentials and data volumes |
-| Publishing/verification | GHCR with ephemeral CI tokens | Prepared; builder pins, Apps and package access still needed |
+| Publishing/verification | Private GHCR with ephemeral CI tokens | Publisher merged; callers, Apps and package access still needed |
 | Monitoring | Dedicated Narx stack on the Narx cluster | Pending; do not copy the Boutique monitoring Application |
 | Notifications | Narx-owned webhook and observer key in shared Argo | Configure only after credentials are supplied |
 
