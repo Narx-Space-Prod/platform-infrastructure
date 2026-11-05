@@ -1,0 +1,109 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: narx-monitoring-isolation
+  namespace: monitoring
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector: {}
+  egress:
+  - to:
+    - podSelector: {}
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values:
+          - commerce-dev
+          - commerce-qa
+          - commerce-production
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8081
+    - protocol: TCP
+      port: 8082
+    - protocol: TCP
+      port: 8083
+    - protocol: TCP
+      port: 8090
+  - to:
+    - ipBlock:
+        cidr: 172.18.0.0/16
+    ports:
+    - protocol: TCP
+      port: 32082
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: narx-monitoring-api
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      narx.space/kubernetes-api-access: 'true'
+  egress:
+  - toEntities:
+    - kube-apiserver
+    toPorts:
+    - ports:
+      - port: '443'
+        protocol: TCP
+      - port: '6443'
+        protocol: TCP
+  ingress:
+  - fromEntities:
+    - kube-apiserver
+    toPorts:
+    - ports:
+      - port: '10250'
+        protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: narx-monitoring-kubelet
+  namespace: monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      narx.space/kubelet-access: 'true'
+  egress:
+  - toEntities:
+    - host
+    - remote-node
+    toPorts:
+    - ports:
+      - port: '10250'
+        protocol: TCP
+      - port: '9100'
+        protocol: TCP

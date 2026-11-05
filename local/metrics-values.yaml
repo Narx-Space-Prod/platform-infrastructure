@@ -1,0 +1,15 @@
+fullnameOverride: narx-metrics-server
+replicas: 1
+tls:
+  type: helm
+apiService:
+  insecureSkipTLSVerify: false
+args:
+- --kubelet-insecure-tls
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

@@ -21,3 +21,5 @@ Private cluster pulls use the independent ghcr-pull Secret created by local/boot
 refresh-registry from a mode-600 read:packages token file outside the repository. CI
 publishes with ephemeral GITHUB_TOKEN credentials; no AWS login or publishing PAT is
 needed. See DOC.md for App separation, package read grants and activation order.
+
+Independent monitoring bootstrap (render-only by default): `python3 local/observability.py --context kind-narx-commerce --integration-values ../platform-gitops/monitoring/local-values.yaml`. See DOC.md for reviewed installation, capacity limits, credentials, verification and retained resources.

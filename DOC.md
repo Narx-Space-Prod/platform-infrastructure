@@ -919,6 +919,96 @@ Environment values are chart validation fixtures, not application releases.
 They cannot be used to deploy the app until CI publishes real images and GitOps
 release records identify their repository and digest.
 
+## Independent local monitoring bootstrap
+
+The reviewed platform proposal uses upstream metrics-server 3.14.0, kube-prometheus-stack
+92.7.0 and prometheus-blackbox-exporter 11.20.3 Helm charts. It is **not installed yet**.
+Chart archives are checksum-verified from `local/observability-charts.json`. This pins
+chart contents; upstream platform image version tags are not a claim of digest pinning.
+
+Argo still owns the application releases. The cluster-wide platform Helm releases are
+operator bootstraps, like Cilium, with values and lifecycle commands tracked here. The
+workload Argo credential does not gain cluster administration or monitoring ownership.
+The monitoring namespace, credentials and storage belong only to Narx. A dedicated
+NodePort Service exposes the shared Argo controller's metrics on the Docker network;
+Prometheus keeps only the three Narx Applications. No laptop IP is embedded.
+
+Prometheus retains six hours/up to 1 GB with a 2 GiB PVC. Grafana and Alertmanager each
+have a 1 GiB PVC. Grafana credentials are generated once and preserved on re-runs;
+Alertmanager reads Slack through a mounted Secret file. No webhook/password is passed
+as a Helm value or command argument. Workload namespaces remain restricted. Monitoring
+permits host mounts for the upstream node exporter; this exception is confined to its
+namespace. Network policies restrict scraping, API and kubelet access by namespace/role.
+Admission certificate jobs receive API access before running.
+
+The local profile requests roughly half a GiB across the steady platform components;
+limits and actual peak usage can be higher. Installation refuses less than 900 MiB host
+MemAvailable. Existing-release upgrades require 300 MiB. These checks are guards, not a
+capacity guarantee: watch working sets, restarts and swap after activation. Loki/Alloy
+are not added in this first memory-limited phase. Add logging after measured capacity.
+
+Metrics-server uses a serving certificate and CA bundle so the aggregated API connection
+is verified. Helm creates a one-year serving certificate and reuses it on upgrades;
+inspect its expiry and renew it before expiration. The kind-only values use `--kubelet-insecure-tls` because the existing kind
+node has a self-signed kubelet serving certificate. This is a documented local exception;
+a production cluster needs trusted kubelet serving certificates. The tool accepts only
+the named local context and cannot provision AWS or apply these values to EKS.
+
+After both monitoring configuration PRs are reviewed/merged, from platform-infrastructure:
+
+```bash
+python3 local/observability.py --context kind-narx-commerce \
+  --integration-values ../platform-gitops/monitoring/local-values.yaml \
+  --cache ../.tools/platform-charts --render-dir ../.tools/platform-render
+```
+
+This command lints/renders only and makes no cluster changes. Render files are private
+because upstream templates generate temporary TLS keys. Do not commit/upload the files.
+CI reuses the render output for contract tests instead of rendering each chart twice.
+The CI integration checkout is immutable data only; its scripts are never executed.
+Use the merged GitOps integration when installing:
+
+```bash
+python3 local/observability.py --context kind-narx-commerce \
+  --management-context kind-mega-local \
+  --integration-values ../platform-gitops/monitoring/local-values.yaml \
+  --slack-webhook-file /home/subhankar/boutique-credentials/narx-slack-webhook \
+  --install
+helm list --kube-context kind-narx-commerce -A
+kubectl --context kind-narx-commerce -n monitoring get pods,pvc
+kubectl --context kind-narx-commerce top nodes
+kubectl --context kind-narx-commerce top pods -A
+```
+
+Helm waits and rolls back a failed release with `--atomic`. This is not one transaction
+across all charts: earlier successful releases remain installed. Namespaces, credentials
+and retained CRDs/PVCs can remain after a failure; inspect them before retrying. The tool
+refuses to replace a metrics API belonging to another release. It never deletes data.
+
+Open dashboards through local port forwards (use an SSH tunnel from another computer):
+
+```bash
+kubectl --context kind-narx-commerce -n monitoring port-forward svc/narx-monitoring-grafana 13000:80
+kubectl --context kind-narx-commerce -n monitoring port-forward svc/narx-monitoring-prometheus 19090:9090
+kubectl --context kind-narx-commerce -n monitoring port-forward svc/narx-monitoring-alertmanager 19093:9093
+```
+
+Grafana: http://localhost:13000; Prometheus: http://localhost:19090;
+Alertmanager: http://localhost:19093. Read the generated Grafana password only in your
+own terminal; never paste it into chat or commit it:
+
+```bash
+kubectl --context kind-narx-commerce -n monitoring get secret narx-monitoring-grafana \
+  -o jsonpath='{.data.admin-password}' | base64 --decode
+```
+
+Before enabling HPA, verify the metrics API is Available, scrape targets cover all three
+environments, readiness probes and Argo series exist, rules load, PVCs are Bound and
+resources fit. Delivery Slack proof does not prove Alertmanager delivery. A controlled
+alert/resolution exercise and HPA load test still need live verification. For cleanup,
+inspect `helm list`, uninstall each named release explicitly and decide separately which
+retained data/CRDs to delete. Preserve monitoring data during normal upgrades.
+
 ## Remaining implementation milestones
 
 The dedicated cluster, Cilium enforcement, App separation, private GHCR publishing,
