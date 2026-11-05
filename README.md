@@ -9,9 +9,10 @@ The guide distinguishes implemented code from activated infrastructure and live 
 
 ## Current state
 
-Delivery remains disabled. Existing local dev/QA Argo Applications are empty bootstrap releases.
-The dedicated Narx cluster and local production destination are prepared for reviewed operator activation;
-merging does not create a cluster. See DOC.md for remaining GHCR and monitoring migration work.
+The dedicated local cluster is active. Dev, QA and production use the same verified
+private image bundle; all three are Synced/Healthy and their real smoke hooks passed.
+GitHub deployment-success statuses and dedicated Slack sends were verified. Independent
+monitoring, metrics/HPA and failure-recovery exercises remain unfinished. See DOC.md.
 All changes after repository initialization go through feature branches and pull requests.
 These repositories are public on GitHub Free. Protected `main` requires a CODEOWNER
 approval, passing CI checks and resolved conversations; administrators follow the same rules.
