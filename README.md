@@ -11,8 +11,8 @@ The guide distinguishes implemented code from activated infrastructure and live 
 
 The dedicated local cluster is active. Dev, QA and production use the same verified
 private image bundle; all three are Synced/Healthy and their real smoke hooks passed.
-GitHub deployment-success statuses and dedicated Slack sends were verified. Independent
-monitoring, metrics/HPA and failure-recovery exercises remain unfinished. See DOC.md.
+GitHub deployment-success statuses and dedicated Slack sends were verified. Metrics-server is now verified; the first full monitoring release rolled back at its
+readiness deadline. Monitoring recovery, HPA and failure-recovery exercises remain unfinished. See DOC.md.
 All changes after repository initialization go through feature branches and pull requests.
 These repositories are public on GitHub Free. Protected `main` requires a CODEOWNER
 approval, passing CI checks and resolved conversations; administrators follow the same rules.

@@ -135,11 +135,11 @@ grafana:
     enabled: false
   resources:
     requests:
-      cpu: 25m
-      memory: 64Mi
+      cpu: 100m
+      memory: 128Mi
     limits:
-      cpu: 400m
-      memory: 192Mi
+      cpu: 1000m
+      memory: 512Mi
   persistence:
     enabled: true
     storageClassName: standard
@@ -168,6 +168,13 @@ grafana:
         access: proxy
         url: http://narx-monitoring-prometheus.monitoring.svc:9090
         isDefault: true
+  startupProbe:
+    httpGet:
+      path: /api/health
+      port: grafana
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 120
 kube-state-metrics:
   podLabels: *id001
   resources:
@@ -177,6 +184,45 @@ kube-state-metrics:
     limits:
       cpu: 200m
       memory: 128Mi
+  collectors:
+  - cronjobs
+  - daemonsets
+  - deployments
+  - endpointslices
+  - horizontalpodautoscalers
+  - ingresses
+  - jobs
+  - leases
+  - limitranges
+  - namespaces
+  - networkpolicies
+  - nodes
+  - persistentvolumeclaims
+  - persistentvolumes
+  - poddisruptionbudgets
+  - pods
+  - replicasets
+  - replicationcontrollers
+  - resourcequotas
+  - services
+  - statefulsets
+  - storageclasses
+  - volumeattachments
+  prometheus:
+    monitor:
+      http:
+        honorLabels: true
+        metricRelabelings:
+        - sourceLabels:
+          - namespace
+          regex: commerce-(dev|qa|production)
+          targetLabel: project
+          replacement: narx-commerce
+        - sourceLabels:
+          - namespace
+          regex: commerce-(dev|qa|production)
+          targetLabel: environment
+          replacement: ${1}
 prometheus-node-exporter:
   resources:
     requests:

@@ -45,8 +45,8 @@ verification showed it did not enforce the intended code-owner gate. All paths a
 Original Boutique's app/monitoring workloads and Jenkins remain paused with user
 approval. Their saved settings and PVC identities are retained. With all three Narx
 environments running, about 980 MiB was available on the 7.5 GiB laptop at verification;
-capacity must be planned before adding monitoring. Independent Narx monitoring, metrics
-server/HPA verification, operator HTTPS access, backup/restore and failure-recovery
+capacity must be planned before completing monitoring. Independent Narx monitoring,
+HPA verification, operator HTTPS access, backup/restore and failure-recovery
 exercises remain unfinished. Checkout/provider sandbox and queue failure exercises still
 need Kubernetes verification. This checkpoint proves delivery, not complete production
 readiness or high availability. Inactive Terraform roots create no AWS resources.
@@ -922,7 +922,25 @@ release records identify their repository and digest.
 ## Independent local monitoring bootstrap
 
 The reviewed platform proposal uses upstream metrics-server 3.14.0, kube-prometheus-stack
-92.7.0 and prometheus-blackbox-exporter 11.20.3 Helm charts. It is **not installed yet**.
+92.7.0 and prometheus-blackbox-exporter 11.20.3 Helm charts. Metrics-server and the
+probe exporter are deployed. The metrics API is Available with serving TLS verification,
+and kubectl top returns real node/pod data. The first full monitoring release hit its
+10-minute wait deadline: Grafana was constrained at its 192 MiB limit and liveness
+restarted it before HTTP startup. Helm atomically removed that failed release; its PVCs
+and the earlier successful releases remain. Application delivery was unaffected.
+
+During that attempt Prometheus collected application metrics, readiness and Rollouts
+metrics across all three environments. CoreDNS metrics needed an explicit TCP 9153
+allowance, and shared Argo metrics were blocked by its existing namespace-only ingress
+policy. The reviewed follow-up adds only controller TCP 8082 ingress from the Docker
+bridge CIDR, preserves the existing policies, and allows CoreDNS metrics only for DNS
+pods. Grafana gets 512 MiB and a ten-minute startup probe. These corrections still need
+review and live retry; the full monitoring stack is not yet verified.
+
+Kube-state-metrics collectors are limited to workload/platform health resources, excluding
+Secrets and ConfigMaps from its read permissions. Its ServiceMonitor explicitly preserves
+resource namespace labels and adds Narx project/environment labels, so project-filtered
+Kubernetes alerts and dashboards can see the observed application metrics.
 Chart archives are checksum-verified from `local/observability-charts.json`. This pins
 chart contents; upstream platform image version tags are not a claim of digest pinning.
 
@@ -948,7 +966,8 @@ capacity guarantee: watch working sets, restarts and swap after activation. Loki
 are not added in this first memory-limited phase. Add logging after measured capacity.
 
 Metrics-server uses a serving certificate and CA bundle so the aggregated API connection
-is verified. Helm creates a one-year serving certificate and reuses it on upgrades;
+is verified. Helm reuses its one-year serving certificate on upgrades; inspect expiry and
+renew it before expiration. Helm creates a one-year serving certificate and reuses it on upgrades;
 inspect its expiry and renew it before expiration. The kind-only values use `--kubelet-insecure-tls` because the existing kind
 node has a self-signed kubelet serving certificate. This is a documented local exception;
 a production cluster needs trusted kubelet serving certificates. The tool accepts only
@@ -1008,6 +1027,43 @@ resources fit. Delivery Slack proof does not prove Alertmanager delivery. A cont
 alert/resolution exercise and HPA load test still need live verification. For cleanup,
 inspect `helm list`, uninstall each named release explicitly and decide separately which
 retained data/CRDs to delete. Preserve monitoring data during normal upgrades.
+
+## Bounded frontend HPA verification
+
+The metrics API is verified; frontend HPA activation is proposed in a separate GitOps
+change and is **not live yet**. QA is bounded to 1–2 replicas and production to 2–3 at
+70% CPU request utilization. HPA uses metrics-server, not Prometheus. Scale-up adds at
+most one pod/minute; scale-down waits five minutes before removing at most one/minute.
+Dev and the other services remain fixed. These are laptop learning bounds, not measured
+production throughput requirements. Production's two frontend replicas share one node.
+
+HPA targets the Argo Rollout scale subresource. Git omits frontend replicas when HPA
+is active; the ApplicationSet ignores only that named Rollout replica field while
+retaining image/pod-template drift checks. Apply the reviewed ApplicationSet before
+relying on autoscaling so Argo does not overwrite HPA decisions.
+
+After the GitOps change is merged and synchronized:
+
+```bash
+kubectl --context kind-narx-commerce -n commerce-qa get hpa commerce-frontend
+kubectl --context kind-narx-commerce -n commerce-qa describe hpa commerce-frontend
+kubectl --context kind-narx-commerce -n commerce-qa get rollout commerce-frontend
+kubectl --context kind-narx-commerce apply -f ../platform-gitops/tests/kubernetes/hpa-load.yaml
+kubectl --context kind-narx-commerce -n commerce-qa logs -f job/narx-hpa-load
+kubectl --context kind-narx-commerce -n commerce-qa get hpa,pods -w
+```
+
+The manual test Job is outside the application chart and runs only in QA. It uses a
+verified immutable frontend artifact as a Node runtime and performs read-only /metrics
+requests for 90 seconds, capped at eight concurrent requests and 500 attempts/second.
+It has CPU/memory limits, a 120-second deadline and automatic cleanup. It creates no
+users/orders/payments and is an HPA mechanics exercise, not a capacity benchmark.
+
+Verify actual scale-up, healthy replicas and Argo remaining Synced. Stop/clean up with
+`kubectl --context kind-narx-commerce -n commerce-qa delete job narx-hpa-load --ignore-not-found`.
+Observe CPU falling and eventual scale-down after stabilization. Missing metrics,
+quota exhaustion or unchanged replica count is not a passed test. Keep production
+free of this synthetic load. A five-minute cooldown is intentional.
 
 ## Remaining implementation milestones
 

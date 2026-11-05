@@ -89,6 +89,21 @@ class BootstrapSafety(unittest.TestCase):
                 obs.prepare_credentials(['kubectl'], file)
             self.assertEqual(command.call_count, 1)
 
+    def test_shared_argo_ingress_opens_only_controller_metrics_to_private_bridge(self):
+        resources = json.loads((ROOT/'local/argocd-metrics.json').read_text())['items']
+        policy = next(d for d in resources if d['kind']=='NetworkPolicy')
+        self.assertEqual(policy['metadata']['namespace'], 'argocd')
+        self.assertEqual(policy['spec']['podSelector']['matchLabels'],
+                         {'app.kubernetes.io/name':'argocd-application-controller'})
+        self.assertEqual(policy['spec']['ingress'], [{'from':[{'ipBlock':{'cidr':'172.18.0.0/16'}}],
+                         'ports':[{'protocol':'TCP','port':8082}]}])
+
+    def test_coredns_scraping_is_limited_to_dns_pods_and_metrics_port(self):
+        policy = next(yaml.safe_load_all((ROOT/'local/monitoring-network.yaml').read_text()))
+        entry = next(e for e in policy['spec']['egress'] if e.get('ports')==[{'protocol':'TCP','port':9153}])
+        self.assertEqual(entry['to'], [{'namespaceSelector':{'matchLabels':{'kubernetes.io/metadata.name':'kube-system'}},
+                                       'podSelector':{'matchLabels':{'k8s-app':'kube-dns'}}}])
+
 
 class RenderedPlatform(unittest.TestCase):
     @classmethod
@@ -136,6 +151,29 @@ class RenderedPlatform(unittest.TestCase):
             policy = next(p for p in policies if all(labels.get(k)==v for k,v in p['spec']['endpointSelector']['matchLabels'].items()))
             self.assertIn('kube-apiserver', policy['spec']['egress'][0]['toEntities'])
             self.assertEqual(policy['metadata']['annotations']['helm.sh/hook-weight'], '-5')
+
+    def test_grafana_has_a_startup_probe_and_memory_headroom(self):
+        deployment = next(d for d in self.docs['narx-monitoring'] if d['kind']=='Deployment'
+                          and d['metadata']['name']=='narx-monitoring-grafana')
+        container = next(c for c in deployment['spec']['template']['spec']['containers'] if c['name']=='grafana')
+        probe = container['startupProbe']
+        self.assertEqual(probe['httpGet']['path'], '/api/health')
+        self.assertGreaterEqual(int(probe['failureThreshold'])*int(probe['periodSeconds']), 600)
+        self.assertEqual(container['resources']['limits']['memory'], '512Mi')
+
+    def test_kube_state_metrics_has_no_secret_permission_and_labels_app_metrics(self):
+        docs = self.docs['narx-monitoring']
+        role = next(d for d in docs if d['kind']=='ClusterRole'
+                    and d['metadata']['name']=='narx-monitoring-kube-state-metrics')
+        resources = [r for rule in role['rules'] for r in rule.get('resources', [])]
+        self.assertNotIn('secrets', resources)
+        self.assertNotIn('*', resources)
+        monitor = next(d for d in docs if d['kind']=='ServiceMonitor'
+                       and 'kube-state-metrics' in d['metadata']['name'])
+        endpoint = next(e for e in monitor['spec']['endpoints'] if e.get('port')=='http')
+        self.assertEqual(endpoint['honorLabels'], 'true')
+        self.assertIn({'sourceLabels':['namespace'],'regex':'commerce-(dev|qa|production)',
+                       'targetLabel':'project','replacement':'narx-commerce'}, endpoint['metricRelabelings'])
 
 
 if __name__ == '__main__':
