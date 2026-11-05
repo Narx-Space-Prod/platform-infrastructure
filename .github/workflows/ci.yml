@@ -31,8 +31,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - run: python3 -m py_compile local/bootstrap.py
-      - run: python3 -m unittest discover -s tests -p 'test_local_*.py' -v
+      - run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+      - run: python3 -m py_compile local/bootstrap.py local/observability.py
       - name: Set up Helm for bootstrap networking validation
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
@@ -46,3 +46,20 @@ jobs:
           helm lint --strict "$RUNNER_TEMP/cilium-1.20.4.tgz" -f local/cilium-values.yaml
           helm template cilium "$RUNNER_TEMP/cilium-1.20.4.tgz" -n kube-system \
             --kube-version 1.34.0 -f local/cilium-values.yaml > "$RUNNER_TEMP/cilium.yaml"
+      - name: Read immutable Narx monitoring integration data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: Narx-Space-Prod/platform-gitops
+          ref: 1f0c3a4887a5c22b6c9760a70db129e3ad360bd5
+          path: narx-monitoring-data
+          persist-credentials: false
+      - name: Render checksum-pinned platform charts without installing
+        run: |
+          python3 local/observability.py --context kind-narx-commerce \
+            --integration-values narx-monitoring-data/monitoring/local-values.yaml \
+            --cache "$RUNNER_TEMP/narx-platform-charts" \
+            --render-dir "$RUNNER_TEMP/narx-platform-render"
+      - name: Verify bootstrap and rendered platform contracts
+        env:
+          NARX_PLATFORM_RENDER_DIR: ${{ runner.temp }}/narx-platform-render
+        run: python3 -m unittest discover -s tests -p 'test_local_*.py' -v

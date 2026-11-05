@@ -1,0 +1,20 @@
+fullnameOverride: blackbox-exporter
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    cpu: 200m
+    memory: 64Mi
+config:
+  modules:
+    http_ready:
+      prober: http
+      timeout: 5s
+      http:
+        valid_status_codes:
+        - 200
+        method: GET
+        preferred_ip_protocol: ip4
+serviceMonitor:
+  enabled: false

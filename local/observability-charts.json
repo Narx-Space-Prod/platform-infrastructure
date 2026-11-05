@@ -1,0 +1,29 @@
+[
+  {
+    "chart": "metrics-server",
+    "release": "narx-metrics-server",
+    "namespace": "kube-system",
+    "version": "3.14.0",
+    "repository": "https://kubernetes-sigs.github.io/metrics-server",
+    "sha256": "c2ca1185c01e6e7f53dd1b7d131f0c9b3fa50e003ed068b784563a1b5a3422a1",
+    "values": "metrics-values.yaml"
+  },
+  {
+    "chart": "prometheus-blackbox-exporter",
+    "release": "narx-probes",
+    "namespace": "monitoring",
+    "version": "11.20.3",
+    "url": "https://github.com/prometheus-community/helm-charts/releases/download/prometheus-blackbox-exporter-11.20.3/prometheus-blackbox-exporter-11.20.3.tgz",
+    "sha256": "435200bf860f083c7cb5c5ace1249939eca797f4511f8e34eb97ab54bc55e5e4",
+    "values": "probes-values.yaml"
+  },
+  {
+    "chart": "kube-prometheus-stack",
+    "release": "narx-monitoring",
+    "namespace": "monitoring",
+    "version": "92.7.0",
+    "oci": "oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack",
+    "sha256": "af35d3e93750ce46d90cbb6537483c8fa914f19fbffa19fbabcb2825181a0f1a",
+    "values": "monitoring-values.yaml"
+  }
+]
