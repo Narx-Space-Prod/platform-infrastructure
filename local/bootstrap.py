@@ -130,8 +130,8 @@ def main():
         else:
             apply({'apiVersion':'v1','kind':'Secret','metadata':{'name':'argocd-notifications-secret','namespace':'argocd'}, **patch})
     if args.operation == 'register-cluster':
-        if not args.management_context or not args.management_context.startswith('kind-') or args.management_context == args.context:
-            parser.error('Registration needs a separate explicit --management-context hosting Argo CD')
+        if not args.management_context or not args.management_context.startswith('kind-') or (args.management_context == args.context and args.context != 'kind-narx-commerce'):
+            parser.error('Registration needs an explicit local --management-context hosting Argo CD')
         namespaces = ['commerce-dev', 'commerce-qa', 'commerce-production']
         for namespace in namespaces:
             command(*base, 'get', 'namespace', namespace, '-o', 'name')

@@ -1218,3 +1218,20 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [Protected environment secrets in reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 - [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
+
+
+## Standalone Narx Argo CD and paused Boutique management cluster
+
+Narx now hosts Argo CD v3.5.3 in its own `argocd` namespace. The three `mega-local` Docker node containers are stopped, preserving their Kubernetes state and volumes. Narx uses its existing `narx-commerce-local` AppProject and ApplicationSet and the scoped `narx-local` cluster registration. No database or queue volumes were recreated. Argo notifications retain the dedicated Narx GitHub observer and Slack credentials.
+
+The pinned upstream installation URL and checksum are recorded in `local/argocd.json`. Install it in the explicit `kind-narx-commerce` context using server-side apply after verifying the downloaded SHA256. `local/bootstrap.py register-cluster` supports using `kind-narx-commerce` for both workload and management context; use the same context for observer and delivery notification configuration. Credentials remain private bootstrap inputs. Apply `platform-gitops/applications/local/commerce.json` into this context.
+
+Inspect and access the dedicated Argo instance:
+
+```bash
+kubectl --context kind-narx-commerce -n argocd get pods,applications,applicationsets
+kubectl --context kind-narx-commerce -n argocd port-forward svc/argocd-server 8080:443
+docker ps -a --filter label=io.x-k8s.kind.cluster=mega-local
+```
+
+Migration source snapshots, including credentials, are private in `../.tools/standalone-argocd-migration/`; never commit or share them. The old Narx ApplicationSet was placed into orphan deletion during handover. Before resuming the old management cluster, ensure its old Narx applications and ApplicationSet cannot resume reconciling Narx. For rollback, first stop the new Argo application and ApplicationSet controllers, then restore the saved source objects and start the old nodes. Never run both Argo instances as active owners of the same Narx workloads. Resume of Boutique requires that ownership check before re-enabling its management cluster.
