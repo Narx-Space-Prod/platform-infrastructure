@@ -1138,6 +1138,50 @@ remain private and outside Git. A recovery-point objective describes acceptable 
 changes; a recovery-time objective describes acceptable outage duration. One passing
 manual drill does not establish either ongoing objective.
 
+## Planning persistent kind node addresses
+
+The 2026-11-06 reboot changed the Narx Docker node address from `172.18.0.4` to
+`172.18.0.3`. Kubernetes updated the node address, but fourteen Cilium endpoint records
+retained old host/pod addresses. Restarting the Cilium agent repaired the observed
+incident: all current readiness probes and all 55 scrape targets recovered. That
+operational repair does not reserve addresses for the next reboot.
+
+The bootstrap helper can generate a read-only reservation plan for the four existing
+kind node containers. It checks container ownership, both explicit Kubernetes contexts,
+bridge membership, subnet bounds, Ready nodes and matching Docker/Kubernetes addresses.
+The plan preserves current IPv4/IPv6 addresses, DNS aliases, container IDs and Kubernetes
+node UIDs. It refuses foreign bridge members and an existing output file. Host-specific
+plans stay private and outside the repository.
+
+```bash
+python3 local/bootstrap.py plan-node-addresses \
+  --context kind-narx-commerce --management-context kind-mega-local \
+  --node-plan-file ../.tools/node-addresses-plan.json
+python3 -m json.tool ../.tools/node-addresses-plan.json
+```
+
+Planning does not disconnect containers, change network policies, stop environments or
+alter storage. The generated disconnect/connect pairs are maintenance commands for
+operator review, not commands executed by the helper. Applying them briefly interrupts
+the relevant node network. Revalidate the stored network/container/node identities and
+current addresses before execution; reconnect and verify one node before touching the
+next. Preserve both the plan and a connectivity recovery command. No cluster, container,
+network or PVC needs to be deleted to reserve its existing address.
+
+Docker reapplies an explicitly configured address when the same container restarts;
+address conflicts cause startup failure instead of silently selecting a new address.
+See [Docker network address persistence](https://docs.docker.com/reference/cli/docker/network/connect/#network-implications-of-stopping-pausing-or-restarting-containers).
+All four nodes share this bridge, so their addressing must be reviewed together. Future
+containers must not claim these addresses. Container/network recreation invalidates the
+saved identities and requires a new plan; this is a local kind lifecycle measure, not an
+EKS networking prescription.
+
+Validation so far covers eight planning/ownership safeguards and a real disposable Docker
+stop/start test preserving an explicit IPv4 address and alias. The disposable container
+and network were removed. The actual cluster reservation commands have **not** been
+applied. A subsequent user-initiated reboot must verify the complete cluster recovery;
+the isolated Docker test alone is not that end-to-end proof.
+
 ## Remaining implementation milestones
 
 1. Resolve Metrics API/HPA stability within the fixed 7.5 GiB host budget and repeat
