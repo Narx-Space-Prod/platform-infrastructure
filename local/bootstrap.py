@@ -6,6 +6,8 @@ Explicit contexts, preserved runtime credentials, no AWS provisioning.
 import argparse
 import base64
 import json
+import ipaddress
+import os
 from pathlib import Path
 import secrets
 import subprocess
@@ -17,9 +19,85 @@ def command(*args, input=None):
     return subprocess.check_output(args, input=input, text=True).strip()
 
 
+NODE_CONTEXTS = {
+    'mega-local-control-plane': ('mega-local', 'kind-mega-local'),
+    'mega-local-worker': ('mega-local', 'kind-mega-local'),
+    'mega-local-worker2': ('mega-local', 'kind-mega-local'),
+    'narx-commerce-control-plane': ('narx-commerce', 'kind-narx-commerce'),
+}
+
+
+def node_reconnect_command(node, network='kind'):
+    args = ['docker', 'network', 'connect', '--ip', node['ipv4']]
+    if node['ipv6']:
+        args += ['--ip6', node['ipv6']]
+    for alias in node['aliases']:
+        args += ['--alias', alias]
+    return args + [network, node['containerId']]
+
+
+def plan_node_addresses(context, management_context, path):
+    """Read-only Docker/Kubernetes inspection; save explicit, reviewable commands."""
+    if (context, management_context) != ('kind-narx-commerce', 'kind-mega-local'):
+        raise ValueError('Address planning requires the two explicit local contexts')
+    containers = json.loads(command('docker', 'inspect', *NODE_CONTEXTS))
+    network = json.loads(command('docker', 'network', 'inspect', 'kind'))[0]
+    if network.get('Driver') != 'bridge' or network.get('Name') != 'kind':
+        raise ValueError('Expected the existing local kind bridge')
+    actual = {c['Name'].lstrip('/'): c for c in containers}
+    if set(actual) != set(NODE_CONTEXTS) or len(actual) != len(containers):
+        raise ValueError('The expected node containers are missing or duplicated')
+    attached = {n['Name'] for n in network.get('Containers', {}).values()}
+    if attached != set(NODE_CONTEXTS):
+        raise ValueError('Unexpected bridge members; review network ownership first')
+    subnets = [ipaddress.ip_network(n['Subnet']) for n in network['IPAM']['Config']]
+    kubernetes = {}
+    for ctx in ('kind-mega-local', 'kind-narx-commerce'):
+        items = json.loads(command('kubectl', '--context', ctx, '--request-timeout=15s',
+                                   'get', 'nodes', '-o', 'json'))['items']
+        kubernetes[ctx] = {n['metadata']['name']: n for n in items}
+    plan = {'schemaVersion': 1, 'network': 'kind', 'networkId': network['Id'],
+            'impact': 'Applying commands briefly disconnects each node; use reviewed maintenance, one node at a time.',
+            'nodes': []}
+    for name, (cluster, ctx) in NODE_CONTEXTS.items():
+        container = actual[name]
+        if not container['State']['Running'] or container['Config']['Labels'].get('io.x-k8s.kind.cluster') != cluster:
+            raise ValueError('Node ownership or running-state mismatch: ' + name)
+        endpoint = container['NetworkSettings']['Networks'].get('kind', {})
+        if endpoint.get('NetworkID') != network['Id']:
+            raise ValueError('Node is attached to a different network: ' + name)
+        ipv4, ipv6 = endpoint.get('IPAddress'), endpoint.get('GlobalIPv6Address', '')
+        for value in [ipv4] + ([ipv6] if ipv6 else []):
+            address = ipaddress.ip_address(value)
+            if not any(address.version == subnet.version and address in subnet for subnet in subnets):
+                raise ValueError('Node address is outside the bridge subnet: ' + name)
+        node = kubernetes[ctx].get(name)
+        if not node or ipv4 not in [a['address'] for a in node['status']['addresses'] if a['type'] == 'InternalIP']:
+            raise ValueError('Docker/Kubernetes address mismatch; recover before planning: ' + name)
+        if not any(c['type'] == 'Ready' and c['status'] == 'True' for c in node['status']['conditions']):
+            raise ValueError('Node is not Ready: ' + name)
+        entry = {'name': name, 'context': ctx, 'containerId': container['Id'],
+                 'nodeUid': node['metadata']['uid'], 'ipv4': ipv4, 'ipv6': ipv6,
+                 'aliases': sorted(set((endpoint.get('Aliases') or []) + [name]))}
+        entry['disconnect'] = ['docker', 'network', 'disconnect', 'kind', container['Id']]
+        entry['connect'] = node_reconnect_command(entry)
+        plan['nodes'].append(entry)
+    path = path.resolve()
+    if path.is_relative_to(Path(__file__).resolve().parents[1]):
+        raise ValueError('Keep host-specific address plans outside the repository')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w') as file:
+        json.dump(plan, file, indent=2)
+        file.write('\n')
+    print('Saved address plan for four existing nodes:', path)
+    print('No network attachments changed. Review before a maintenance window.')
+    return plan
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['prepare', 'register-cluster', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications'])
+    parser.add_argument('operation', choices=['prepare', 'register-cluster', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications', 'plan-node-addresses'])
     parser.add_argument('--context', required=True)
     parser.add_argument('--management-context')
     parser.add_argument('--environment', choices=['dev', 'qa', 'production'])
@@ -30,11 +108,17 @@ def main():
     parser.add_argument('--private-key-file', type=Path)
     parser.add_argument('--notifications-file', type=Path)
     parser.add_argument('--slack-webhook-file', type=Path)
+    parser.add_argument('--node-plan-file', type=Path)
     args = parser.parse_args()
     if not args.context.startswith('kind-'):
         parser.error('This helper is only for an explicitly named local kind cluster')
     if args.operation in {'prepare', 'register-cluster', 'refresh-registry'} and args.context != 'kind-narx-commerce':
         parser.error('Narx workloads must use the dedicated kind-narx-commerce context')
+    if args.operation == 'plan-node-addresses':
+        if not args.node_plan_file:
+            parser.error('Address planning requires --node-plan-file outside the repository')
+        plan_node_addresses(args.context, args.management_context, args.node_plan_file)
+        return
     base = ['kubectl', '--context', args.context]
     def apply(value):
         command(*base, 'apply', '--server-side', '--field-manager=narx-local-bootstrap', '-f', '-', input=json.dumps(value))
