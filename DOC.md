@@ -51,9 +51,11 @@ These recovery checks used an explicitly approved temporary Dev-client pause for
 headroom. On the 7.5 GiB machine, the five-minute Metrics API check with all environments
 active had five unhealthy samples out of 21. With Dev clients paused it passed all 21
 samples. The metrics-server update stopped the observed probe-driven restarts, but it
-does not solve physical host pressure. The owner chose to keep all environments active
-and add RAM; the management topology remains unchanged. Repeat the full-profile stability
-check after that upgrade. A healthy snapshot is not proof of sustained capacity.
+does not solve physical host pressure. The operating budget is fixed at 7.5 GiB;
+all environments remain active and the management topology is unchanged. No RAM upgrade
+is planned. Sustained Metrics API availability remains unresolved; repeat the full-profile
+stability check after an agreed capacity improvement. A healthy snapshot is not proof
+of sustained capacity.
 
 Operator HTTPS, Kubernetes checkout/provider/queue failure drills and a real GitOps
 bundle rollback remain unfinished. This is a delivery and operations learning setup,
@@ -1138,8 +1140,9 @@ manual drill does not establish either ongoing objective.
 
 ## Remaining implementation milestones
 
-1. Upgrade host RAM as selected by the owner, then repeat the full three-environment
-   Metrics API/HPA stability check. Keep the current environment/management layout.
+1. Resolve Metrics API/HPA stability within the fixed 7.5 GiB host budget and repeat
+   the full three-environment observation window. All environments and the management
+   layout currently remain active; further capacity changes have not been selected.
 2. Verify a real second release and full GitOps bundle rollback through the protected
    review workflow; preserve database/queue data and distinguish traffic recovery from
    reverting desired Git state.
