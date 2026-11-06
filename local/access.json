@@ -1,0 +1,44 @@
+{
+  "dev": {
+    "namespace": "commerce-dev",
+    "service": "commerce-frontend",
+    "localPort": 18080,
+    "servicePort": 80,
+    "hostname": "narx-dev.narx.space"
+  },
+  "qa": {
+    "namespace": "commerce-qa",
+    "service": "commerce-frontend",
+    "localPort": 18081,
+    "servicePort": 80,
+    "hostname": "narx-qa.narx.space"
+  },
+  "production": {
+    "namespace": "commerce-production",
+    "service": "commerce-frontend",
+    "localPort": 18082,
+    "servicePort": 80,
+    "hostname": "narx-prod.narx.space"
+  },
+  "grafana": {
+    "namespace": "monitoring",
+    "service": "narx-monitoring-grafana",
+    "localPort": 13000,
+    "servicePort": 80,
+    "hostname": "narx-grafana.narx.space"
+  },
+  "prometheus": {
+    "namespace": "monitoring",
+    "service": "narx-monitoring-prometheus",
+    "localPort": 19090,
+    "servicePort": 9090,
+    "hostname": "narx-prometheus.narx.space"
+  },
+  "alertmanager": {
+    "namespace": "monitoring",
+    "service": "narx-monitoring-alertmanager",
+    "localPort": 19093,
+    "servicePort": 9093,
+    "hostname": "narx-alerts.narx.space"
+  }
+}
