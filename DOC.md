@@ -1235,3 +1235,21 @@ docker ps -a --filter label=io.x-k8s.kind.cluster=mega-local
 ```
 
 Migration source snapshots, including credentials, are private in `../.tools/standalone-argocd-migration/`; never commit or share them. The old Narx ApplicationSet was placed into orphan deletion during handover. Before resuming the old management cluster, ensure its old Narx applications and ApplicationSet cannot resume reconciling Narx. For rollback, first stop the new Argo application and ApplicationSet controllers, then restore the saved source objects and start the old nodes. Never run both Argo instances as active owners of the same Narx workloads. Resume of Boutique requires that ownership check before re-enabling its management cluster.
+
+
+## Cloudflare Tunnel origin for dedicated Argo CD
+
+`argocd.narx.space` routes through the existing host cloudflared service to `https://127.0.0.1:8080`. The dedicated Argo server is a ClusterIP service, so the host needs a loopback port-forward. Install the tracked systemd unit to restart forwarding when the connection exits and after host boot:
+
+```bash
+sudo install -m 0644 local/narx-argocd-forward.service /etc/systemd/system/narx-argocd-forward.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now narx-argocd-forward.service
+systemctl status narx-argocd-forward.service --no-pager
+curl -kI https://127.0.0.1:8080/
+curl -I https://argocd.narx.space/
+```
+
+The unit explicitly selects the Narx context and binds only loopback. It reads this host's existing private root kubeconfig; adapt that path/User for a different operator installation. The cache is confined to its private runtime directory. Cloudflare credentials remain in the existing tunnel service, outside Git. No new tunnel, DNS route or router port forwarding is created. Keep TLS trust handling scoped to the loopback origin; use Cloudflare Access for the administration hostname. For permanent origin certificate verification, configure a trusted Argo serving certificate/CA rather than disabling verification globally.
+
+Diagnose a 502 using `journalctl -u cloudflared -u narx-argocd-forward --since '10 minutes ago' --no-pager`. Connection refused on 127.0.0.1:8080 means the origin forward is down. Certificate errors mean origin TLS settings need attention. Stop only the bridge with `sudo systemctl disable --now narx-argocd-forward.service`; cluster workloads are unaffected.
