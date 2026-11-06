@@ -52,13 +52,21 @@ class ClusterRegistration(unittest.TestCase):
         for args, _ in calls:
             self.assertNotIn('test-bearer', ' '.join(args))
 
-    def test_same_cluster_or_boutique_target_is_rejected_before_any_write(self):
-        for target, manager in [('kind-mega-local','kind-other'), ('kind-narx-commerce','kind-narx-commerce')]:
+    def test_boutique_target_is_rejected_before_any_write(self):
+        for target, manager in [('kind-mega-local','kind-other')]:
             with patch.object(b, 'command') as command:
                 with patch.object(sys, 'argv', ['bootstrap.py','register-cluster','--context',target,'--management-context',manager]), \
                         contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     b.main()
                 command.assert_not_called()
+
+    def test_standalone_registration_preserves_namespace_scoping(self):
+        calls, output = self.run_registration(manager='kind-narx-commerce')
+        writes = [json.loads(value) for _, value in calls if value is not None]
+        registration = next(doc for doc in writes if doc['metadata']['name'] == 'narx-local-cluster')
+        self.assertEqual(registration['stringData']['clusterResources'], 'false')
+        self.assertFalse(any(doc['kind'] in {'ClusterRole', 'ClusterRoleBinding'} for doc in writes))
+        self.assertNotIn('test-bearer', output)
 
     def test_unpopulated_token_never_registers_an_empty_credential(self):
         with self.assertRaisesRegex(SystemExit, 'registration was not written'):
