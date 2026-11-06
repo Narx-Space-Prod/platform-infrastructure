@@ -122,6 +122,20 @@ class RenderedPlatform(unittest.TestCase):
         self.assertEqual(api['spec']['caBundle'], secret['data']['tls.crt'])
         self.assertIn(b'BEGIN CERTIFICATE', base64.b64decode(api['spec']['caBundle']))
 
+    def test_metrics_server_keeps_health_checks_and_has_startup_and_cpu_headroom(self):
+        deployment=next(d for d in self.docs['narx-metrics-server'] if d['kind']=='Deployment')
+        container=deployment['spec']['template']['spec']['containers'][0]
+        self.assertEqual(int(container['livenessProbe']['initialDelaySeconds']),120)
+        for name,path in [('livenessProbe','/livez'),('readinessProbe','/readyz')]:
+            probe=container[name]
+            self.assertEqual(probe['httpGet']['path'],path)
+            self.assertEqual(probe['httpGet']['scheme'],'HTTPS')
+            self.assertEqual(int(probe['timeoutSeconds']),5)
+            self.assertEqual(int(probe['failureThreshold']),3)
+        self.assertEqual(container['resources']['requests']['cpu'],'100m')
+        self.assertEqual(container['resources']['limits']['cpu'],'500m')
+        self.assertEqual(container['resources']['limits']['memory'],'128Mi')
+
     def test_grafana_uses_existing_secret_instead_of_a_committed_password(self):
         docs = self.docs['narx-monitoring']
         deployment = next(d for d in docs if d['kind']=='Deployment' and d['metadata']['name']=='narx-monitoring-grafana')

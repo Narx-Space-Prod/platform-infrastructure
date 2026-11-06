@@ -1104,3 +1104,21 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [Protected environment secrets in reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 - [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
+
+
+### Metrics API reliability and Argo health
+
+An HPA needs both its target's scale subresource and CPU metrics from `metrics.k8s.io`. A healthy frontend does not prove that autoscaling works. If `ScalingActive=False` reports `FailedGetResourceMetric`, investigate the Metrics API before changing Argo health rules. `AbleToScale=True` only confirms access to the scale target; it does not confirm access to CPU measurements.
+
+During the 2026-11-06 investigation, both QA and production HPA conditions reported an unavailable Metrics API. Metrics-server events confirmed liveness-driven restarts after one-second HTTPS probe timeouts; the previous process logs showed graceful shutdown, not an observed out-of-memory failure. The proposed reliability profile reserves 100m CPU, allows a 500m CPU burst, retains the 32Mi/128Mi memory request/limit, gives `/livez` a two-minute startup delay and allows five seconds per health check. `/readyz` continues to remove an unhealthy metrics-server from service. The pinned metrics-server chart does not render a dedicated `startupProbe`; the supported `livenessProbe.initialDelaySeconds` supplies this startup grace. This configuration needs reviewed installation and a live observation window before it is evidence of stability; it cannot compensate for an overloaded host.
+
+```bash
+kubectl --context kind-narx-commerce get apiservice v1beta1.metrics.k8s.io
+kubectl --context kind-narx-commerce get --raw /apis/metrics.k8s.io/v1beta1/nodes
+kubectl --context kind-narx-commerce -n commerce-qa describe hpa commerce-frontend
+kubectl --context kind-narx-commerce -n commerce-production describe hpa commerce-frontend
+kubectl --context kind-narx-commerce -n kube-system describe pod -l app.kubernetes.io/name=metrics-server
+kubectl --context kind-narx-commerce -n kube-system logs deployment/narx-metrics-server --previous
+```
+
+Check that `AbleToScale` and `ScalingActive` are true, metrics are fresh, and the metrics-server restart count stays unchanged over multiple HPA evaluation cycles. `ScalingLimited=True` at a configured minimum or maximum is a separate condition to interpret against the configured bounds. Preserve serving-certificate verification on the aggregated API; the existing kubelet self-signed certificate exception is specific to this local kind profile. See the [upstream Metrics Server requirements](https://github.com/kubernetes-sigs/metrics-server#requirements).

@@ -8,8 +8,16 @@ args:
 - --kubelet-insecure-tls
 resources:
   requests:
-    cpu: 25m
+    cpu: 100m
     memory: 32Mi
   limits:
-    cpu: 200m
+    cpu: 500m
     memory: 128Mi
+
+# Keep the autoscaling API stable during laptop startup and brief host stalls.
+# Readiness still fails when metrics are unavailable; health is not overridden.
+livenessProbe:
+  initialDelaySeconds: 120
+  timeoutSeconds: 5
+readinessProbe:
+  timeoutSeconds: 5
