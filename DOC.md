@@ -5,7 +5,7 @@ The project models application teams delivering a commerce system and a platform
 providing CI, infrastructure and GitOps. Team memberships represent a learning scenario;
 they do not mean a company or real delivery team operates this environment.
 
-## Verified activation checkpoint — 5 November 2026
+## Verified operating checkpoint — 6 November 2026
 
 Narx Commerce runs locally on its dedicated `kind-narx-commerce` cluster. Only the
 existing Argo CD control plane in `kind-mega-local` is shared with Original Boutique.
@@ -13,14 +13,12 @@ The Jenkins Boutique project and standalone `commerce-aws` project remain separa
 Kubernetes v1.34.0, Cilium 1.20.4 and CoreDNS are healthy. A live disposable traffic
 exercise verified that network policies allow selected peers and block other namespaces.
 
-All three real environments are deployed: dev has 9 Ready pods, QA 10, and production
-11 (including two frontend replicas). All currently running containers have zero restarts.
-Each Application is Synced/Healthy and its actual PostSync smoke Job succeeded. Dev and
-QA were verified at GitOps revision `9d23da82b5ef3c63ad8dbe73ad5f571a2e792817`;
-production at `bce543a0becbc381816fb0229476e5ba9ca28c22` after production PR #21.
-All six workload roles across the three environments match the same immutable release
-bundle `d375c7795cc6c837` (identifier prefix). Promotion did not rebuild or retag images.
-Initial deployment does not exercise a second-release blue-green failure or rollback.
+All three environments are deployed and active. At the final recovery checkpoint they
+were Synced/Healthy at GitOps revision `d37e87cd756d21051b348e23877103c1e1183b1c`,
+with successful PostSync operations. All six workload roles retain the immutable release
+bundle `d375c7795cc6c837` (identifier prefix); promotions did not rebuild or retag images.
+Frontend HPA is live in QA and production. An isolated fixture verified blue-green
+traffic recovery; an actual second-release/full-bundle GitOps rollback remains separate.
 
 The dedicated observer App published real deployment-success statuses for all three
 environments. Argo's notification logs confirmed sends through the dedicated Narx Slack
@@ -43,13 +41,24 @@ is not enabled. A zero-generic-review configuration was withdrawn after live Git
 verification showed it did not enforce the intended code-owner gate. All paths are owned.
 
 Original Boutique's app/monitoring workloads and Jenkins remain paused with user
-approval. Their saved settings and PVC identities are retained. With all three Narx
-environments running, about 980 MiB was available on the 7.5 GiB laptop at verification;
-capacity must be planned before completing monitoring. Independent Narx monitoring,
-HPA verification, operator HTTPS access, backup/restore and failure-recovery
-exercises remain unfinished. Checkout/provider sandbox and queue failure exercises still
-need Kubernetes verification. This checkpoint proves delivery, not complete production
-readiness or high availability. Inactive Terraform roots create no AWS resources.
+approval; shared Argo and its management cluster remain running. The saved settings
+and PVC identities are retained. Narx monitoring and bounded HPA are live. The QA HPA
+exercise passed 15,401 requests with zero failures and scaling 1 → 2 → 1. The isolated
+Rollouts recovery drill and QA database restore also passed; their temporary namespaces
+were removed and Dev was restored afterward.
+
+These recovery checks used an explicitly approved temporary Dev-client pause for host
+headroom. On the 7.5 GiB machine, the five-minute Metrics API check with all environments
+active had five unhealthy samples out of 21. With Dev clients paused it passed all 21
+samples. The metrics-server update stopped the observed probe-driven restarts, but it
+does not solve physical host pressure. The owner chose to keep all environments active
+and add RAM; the management topology remains unchanged. Repeat the full-profile stability
+check after that upgrade. A healthy snapshot is not proof of sustained capacity.
+
+Operator HTTPS, Kubernetes checkout/provider/queue failure drills and a real GitOps
+bundle rollback remain unfinished. This is a delivery and operations learning setup,
+not a high-availability or production-capacity claim. Inactive Terraform roots create
+no AWS resources.
 
 The organisation uses GitHub Free and all six repositories are public. GitHub now
 enforces `main` branch protection: PRs, one CODEOWNER approval, the repository's CI
@@ -355,9 +364,8 @@ monitoring storage, runtime credentials or release pipelines.
 
 This migration is staged. The old commerce-dev/qa namespaces still exist in
 kind-mega-local without app pods/PVCs. The three Argo Applications are now retargeted
-to the separate Narx cluster and have passed their real release smoke hooks. Shared Boutique
-monitoring still contains the earlier Narx integration until the independent Narx
-monitoring deployment is verified. No old resources are deleted by the bootstrap helper.
+to the separate Narx cluster and have passed their real release smoke hooks. The dedicated Narx monitoring stack is now live; the earlier Boutique integration
+remains a separate cleanup audit and is not the Narx monitoring backend. No old resources are deleted by the bootstrap helper.
 
 | Item | Target | Activation status |
 | --- | --- | --- |
@@ -367,7 +375,7 @@ monitoring deployment is verified. No old resources are deleted by the bootstrap
 | Registered destination | `narx-local`, only three commerce namespaces | Registered; positive workload and negative cluster/system-secret RBAC checks passed |
 | Environments | `commerce-dev`, `commerce-qa`, `commerce-production` | Real workloads Ready; isolated runtime/pull secrets, databases and queues |
 | Publishing/verification | Private GHCR with ephemeral CI tokens | Private artifacts, source CI, provenance/SBOMs and protected-key cutover verified |
-| Monitoring | Dedicated Narx stack on the Narx cluster | Pending; do not copy the Boutique monitoring Application |
+| Monitoring | Dedicated Narx stack on the Narx cluster | Live; dedicated storage/credentials, Grafana/datasource verified and 55/55 scrape targets Up at the final checkpoint |
 | Notifications | Separate observer key in shared Argo | Real GitHub success and dedicated Slack send confirmations for all three environments |
 
 The 7.5 GiB laptop cannot safely run both complete projects and three full Narx
@@ -546,12 +554,11 @@ analysis keeps the existing frontend active; failed post-switch analysis restore
 traffic. A reviewed Git rollback proposal separately restores desired Git state.
 Database migrations, refunds and orders are never reversed by image rollback.
 
-`monitoring/local-values.yaml` contains the Narx-specific metrics, dashboards and alert
-rules from the earlier integration. They are still attached to Boutique's shared stack
-in the current live installation. The target is an independent Narx monitoring stack,
-including its own storage, Grafana credentials, Alertmanager routes and logging. Its
-chart ownership and remote-cluster deployment are pending; the workload registration
-above intentionally cannot install cluster-scoped monitoring resources.
+`monitoring/local-values.yaml` supplies the Narx-specific scrape jobs, dashboard and
+alert rules to the independently installed Narx monitoring stack. Prometheus, Grafana,
+Alertmanager and the blackbox exporter use Narx-owned storage and credentials. Loki/Alloy
+remain deferred for capacity. Platform Helm releases have operator bootstrap ownership;
+the restricted workload Argo credential cannot install cluster-scoped monitoring resources.
 
 Do not apply the old Boutique multi-source monitoring Application as a Narx bootstrap
 step. After independent Narx monitoring is healthy, remove only its earlier integration
@@ -679,7 +686,9 @@ and `commerce_outbox_publish_total{result="sent|failed"}`. Worker metrics includ
 `commerce_queue_consume_total{result="processed|duplicate|failed"}` and
 `commerce_queue_poll_total{result="failed"}`. Outbox gauges refresh every 30 seconds.
 Logs correlate event/order IDs without logging message bodies or credentials.
-Prometheus alert rules, DLQ-depth and queue-age alarms, and dashboards are still pending.
+Prometheus rules and the dashboard cover outbox age and processing/polling failures.
+Direct queue/DLQ depth and oldest-message instrumentation still need separate verification;
+application failure counters are not substitutes for those queue measurements.
 An empty poll is normal; repeated processing failures or growing backlog need attention.
 
 ### Local failure exercise
@@ -915,27 +924,25 @@ helm template catalogue charts/commerce-service -n commerce-dev -f environments/
   --set image.repository=registry.invalid/validation-only/catalogue --set "image.digest=$validation_digest"
 ```
 
-Environment values are chart validation fixtures, not application releases.
-They cannot be used to deploy the app until CI publishes real images and GitOps
-release records identify their repository and digest.
+The dummy image references in this example are chart validation fixtures, never
+application releases. Live deployments use the reviewed environment `release.json`
+records containing real repositories and immutable digests.
 
 ## Independent local monitoring bootstrap
 
-The reviewed platform proposal uses upstream metrics-server 3.14.0, kube-prometheus-stack
-92.7.0 and prometheus-blackbox-exporter 11.20.3 Helm charts. Metrics-server and the
-probe exporter are deployed. The metrics API is Available with serving TLS verification,
-and kubectl top returns real node/pod data. The first full monitoring release hit its
-10-minute wait deadline: Grafana was constrained at its 192 MiB limit and liveness
-restarted it before HTTP startup. Helm atomically removed that failed release; its PVCs
-and the earlier successful releases remain. Application delivery was unaffected.
+The installed platform uses upstream metrics-server 3.14.0, kube-prometheus-stack
+92.7.0 and prometheus-blackbox-exporter 11.20.3 Helm charts. The first full-stack install
+rolled back after Grafana exceeded its startup budget. The reviewed correction was
+installed successfully: Grafana has a 512 MiB limit and a ten-minute startup probe;
+CoreDNS scraping has scoped TCP 9153 access; shared Argo controller metrics have scoped
+TCP 8082 ingress from the Docker bridge. Existing policies were preserved.
 
-During that attempt Prometheus collected application metrics, readiness and Rollouts
-metrics across all three environments. CoreDNS metrics needed an explicit TCP 9153
-allowance, and shared Argo metrics were blocked by its existing namespace-only ingress
-policy. The reviewed follow-up adds only controller TCP 8082 ingress from the Docker
-bridge CIDR, preserves the existing policies, and allows CoreDNS metrics only for DNS
-pods. Grafana gets 512 MiB and a ten-minute startup probe. These corrections still need
-review and live retry; the full monitoring stack is not yet verified.
+Prometheus, Alertmanager and Grafana are running with three retained, Bound PVCs.
+Grafana health, the Narx dashboard and the Prometheus datasource were verified. At the
+final checkpoint all 55 scrape targets were Up, readiness probes succeeded and real
+Alertmanager notifications had confirmed Slack delivery. Monitoring pods being Ready
+alone is insufficient: verify target health and `probe_success` too. Host pressure can
+still interrupt the separate Metrics API used by HPA; see its reliability section below.
 
 Kube-state-metrics collectors are limited to workload/platform health resources, excluding
 Secrets and ConfigMaps from its read permissions. Its ServiceMonitor explicitly preserves
@@ -966,14 +973,13 @@ capacity guarantee: watch working sets, restarts and swap after activation. Loki
 are not added in this first memory-limited phase. Add logging after measured capacity.
 
 Metrics-server uses a serving certificate and CA bundle so the aggregated API connection
-is verified. Helm reuses its one-year serving certificate on upgrades; inspect expiry and
-renew it before expiration. Helm creates a one-year serving certificate and reuses it on upgrades;
+is verified. Helm creates a one-year serving certificate and reuses it on upgrades;
 inspect its expiry and renew it before expiration. The kind-only values use `--kubelet-insecure-tls` because the existing kind
 node has a self-signed kubelet serving certificate. This is a documented local exception;
 a production cluster needs trusted kubelet serving certificates. The tool accepts only
 the named local context and cannot provision AWS or apply these values to EKS.
 
-After both monitoring configuration PRs are reviewed/merged, from platform-infrastructure:
+To validate the reviewed monitoring configuration from platform-infrastructure:
 
 ```bash
 python3 local/observability.py --context kind-narx-commerce \
@@ -1021,17 +1027,35 @@ kubectl --context kind-narx-commerce -n monitoring get secret narx-monitoring-gr
   -o jsonpath='{.data.admin-password}' | base64 --decode
 ```
 
-Before enabling HPA, verify the metrics API is Available, scrape targets cover all three
-environments, readiness probes and Argo series exist, rules load, PVCs are Bound and
-resources fit. Delivery Slack proof does not prove Alertmanager delivery. A controlled
-alert/resolution exercise and HPA load test still need live verification. For cleanup,
+For activation or troubleshooting, verify the metrics API is Available, scrape targets
+cover all environments, readiness probes and Argo series exist, rules load, PVCs are Bound
+and resources fit. Delivery Slack proof alone does not prove Alertmanager delivery; the
+current stack has separate real Alertmanager delivery evidence. For cleanup,
 inspect `helm list`, uninstall each named release explicitly and decide separately which
 retained data/CRDs to delete. Preserve monitoring data during normal upgrades.
 
+### Metrics API reliability and Argo health
+
+An HPA needs both its target's scale subresource and CPU metrics from `metrics.k8s.io`. A healthy frontend does not prove that autoscaling works. If `ScalingActive=False` reports `FailedGetResourceMetric`, investigate the Metrics API before changing Argo health rules. `AbleToScale=True` only confirms access to the scale target; it does not confirm access to CPU measurements.
+
+During the 2026-11-06 investigation, both QA and production HPA conditions reported an unavailable Metrics API. Metrics-server events confirmed liveness-driven restarts after one-second HTTPS probe timeouts; the previous process logs showed graceful shutdown, not an observed out-of-memory failure. The installed reliability profile reserves 100m CPU, allows a 500m CPU burst, retains the 32Mi/128Mi memory request/limit, gives `/livez` a two-minute startup delay and allows five seconds per health check. `/readyz` continues to remove an unhealthy metrics-server from service. The pinned metrics-server chart does not render a dedicated `startupProbe`; the supported `livenessProbe.initialDelaySeconds` supplies this startup grace. The reviewed update was installed and its serving CA verified. Metrics-server remained at zero restarts during observation. The full-profile window still had kubelet scrape failures under host pressure; the reduced-load window passed. CPU/probe settings cannot compensate for insufficient physical host capacity.
+
+```bash
+kubectl --context kind-narx-commerce get apiservice v1beta1.metrics.k8s.io
+kubectl --context kind-narx-commerce get --raw /apis/metrics.k8s.io/v1beta1/nodes
+kubectl --context kind-narx-commerce -n commerce-qa describe hpa commerce-frontend
+kubectl --context kind-narx-commerce -n commerce-production describe hpa commerce-frontend
+kubectl --context kind-narx-commerce -n kube-system describe pod -l app.kubernetes.io/name=metrics-server
+kubectl --context kind-narx-commerce -n kube-system logs deployment/narx-metrics-server --previous
+```
+
+Check that `AbleToScale` and `ScalingActive` are true, metrics are fresh, and the metrics-server restart count stays unchanged over multiple HPA evaluation cycles. `ScalingLimited=True` at a configured minimum or maximum is a separate condition to interpret against the configured bounds. Preserve serving-certificate verification on the aggregated API; the existing kubelet self-signed certificate exception is specific to this local kind profile. See the [upstream Metrics Server requirements](https://github.com/kubernetes-sigs/metrics-server#requirements).
+
+
 ## Bounded frontend HPA verification
 
-The metrics API is verified; frontend HPA activation is proposed in a separate GitOps
-change and is **not live yet**. QA is bounded to 1–2 replicas and production to 2–3 at
+Frontend HPA is activated through reviewed GitOps configuration. QA is bounded to
+1–2 replicas and production to 2–3 at
 70% CPU request utilization. HPA uses metrics-server, not Prometheus. Scale-up adds at
 most one pod/minute; scale-down waits five minutes before removing at most one/minute.
 Dev and the other services remain fixed. These are laptop learning bounds, not measured
@@ -1042,7 +1066,7 @@ is active; the ApplicationSet ignores only that named Rollout replica field whil
 retaining image/pod-template drift checks. Apply the reviewed ApplicationSet before
 relying on autoscaling so Argo does not overwrite HPA decisions.
 
-After the GitOps change is merged and synchronized:
+For a bounded manual QA exercise after checking host headroom:
 
 ```bash
 kubectl --context kind-narx-commerce -n commerce-qa get hpa commerce-frontend
@@ -1055,7 +1079,7 @@ kubectl --context kind-narx-commerce -n commerce-qa get hpa,pods -w
 
 The manual test Job is outside the application chart and runs only in QA. It uses a
 verified immutable frontend artifact as a Node runtime and performs read-only /metrics
-requests for 90 seconds, capped at eight concurrent requests and 500 attempts/second.
+requests for 90 seconds, capped at four concurrent requests and 200 attempts/second.
 It has CPU/memory limits, a 120-second deadline and automatic cleanup. It creates no
 users/orders/payments and is an HPA mechanics exercise, not a capacity benchmark.
 
@@ -1065,22 +1089,65 @@ Observe CPU falling and eventual scale-down after stabilization. Missing metrics
 quota exhaustion or unchanged replica count is not a passed test. Keep production
 free of this synthetic load. A five-minute cooldown is intentional.
 
+## Validated recovery drills
+
+The 2026-11-06 isolated Rollouts fixture verified three distinct cases: failed preview
+analysis retained stable traffic; failed post-switch analysis restored stable traffic
+after the bad candidate was actually observed serving; a healthy candidate passed both
+analyses and promoted. Its namespace was confirmed deleted. [GitOps PR #26](https://github.com/Narx-Space-Prod/platform-gitops/pull/26) records the
+repeatable harness and its generation/candidate checks. This proves Rollouts mechanics,
+not full application/payment recovery or reviewed rollback of an entire GitOps bundle.
+
+A private QA custom-format PostgreSQL archive was restored into a fresh disposable
+PostgreSQL 16 pod. The pod used ephemeral storage, a restricted namespace, no service
+account token, default-deny networking and a loopback-only listener. The restored data
+matched row counts and sorted-data hashes for all 11 tables and sequence values. The
+live database was not modified; the disposable namespace was removed. The private local
+archive remains available to the operator. This was a manual restore drill, not a
+scheduled or off-host backup service.
+
+From platform-infrastructure, these commands create and inspect a private QA backup:
+
+```bash
+umask 077
+NARX_BACKUP_DIR=../.tools/backups
+mkdir -p "$NARX_BACKUP_DIR"
+chmod 700 "$NARX_BACKUP_DIR"
+NARX_BACKUP_FILE="$NARX_BACKUP_DIR/commerce-qa-$(date -u +%Y%m%dT%H%M%SZ).dump"
+if kubectl --context kind-narx-commerce -n commerce-qa exec commerce-postgres-0 -- \
+  pg_dump --no-password -U commerce -d commerce --format=custom --no-owner --no-acl \
+  > "$NARX_BACKUP_FILE.partial"; then
+  mv "$NARX_BACKUP_FILE.partial" "$NARX_BACKUP_FILE"
+  sha256sum "$NARX_BACKUP_FILE" > "$NARX_BACKUP_FILE.sha256"
+else
+  rm -f "$NARX_BACKUP_FILE.partial"
+  echo 'Backup failed; no complete archive was retained.' >&2
+fi
+# This reads the archive, not the live database, and does not restore anything.
+kubectl --context kind-narx-commerce -n commerce-qa exec -i commerce-postgres-0 -- \
+  pg_restore --list < "$NARX_BACKUP_FILE"
+```
+
+Archive checksums detect file changes; successful restore plus data comparison verifies
+recoverability. Restore only into an explicitly provisioned disposable destination for
+practice. Never send an exercise archive to `commerce-dev`, `commerce-qa` or
+`commerce-production` as a restore target. Backups contain application data and must
+remain private and outside Git. A recovery-point objective describes acceptable lost
+changes; a recovery-time objective describes acceptable outage duration. One passing
+manual drill does not establish either ongoing objective.
+
 ## Remaining implementation milestones
 
-The dedicated cluster, Cilium enforcement, App separation, private GHCR publishing,
-protected release keys and real dev -> QA -> production promotion are activated and
-verified. The remaining work is:
-
-1. Deploy independently owned Narx Prometheus/Grafana/Alertmanager and logging with
-   its own credentials and storage. Fit the resource plan to the laptop before activation.
-   Add the metrics API and verify HPA with bounded replica limits.
-2. Exercise a second frontend release and a controlled failure to verify pre/post-switch
-   analysis and recovery. Verify reviewed rollback without losing database or queue data.
-3. Complete operator HTTPS access, local data backup/restore and runtime security checks.
+1. Upgrade host RAM as selected by the owner, then repeat the full three-environment
+   Metrics API/HPA stability check. Keep the current environment/management layout.
+2. Verify a real second release and full GitOps bundle rollback through the protected
+   review workflow; preserve database/queue data and distinguish traffic recovery from
+   reverting desired Git state.
+3. Complete operator HTTPS and remaining runtime-access hardening.
 4. Verify checkout/provider sandbox, queue retries/DLQ and replay in Kubernetes. Existing
-   local test code is not a substitute for this environment verification.
-5. Remove the earlier Narx monitoring integration from Boutique only after the independent
-   stack is verified. Update this guide with evidence and remaining laptop limitations.
+   local/Compose tests are not environment evidence.
+5. Audit removal of the earlier Narx integration from Boutique through that repository's
+   reviewed workflow. Add centralized logging only after measured capacity is available.
 
 AWS provisioning belongs to the separate `commerce-aws` project. The retained Terraform
 roots and ECR explanations are historical inactive code, not local activation commands.
@@ -1104,21 +1171,3 @@ roots and ECR explanations are historical inactive code, not local activation co
 - [Protected environment secrets in reusable workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
 - [Argo CD declarative cluster registration](https://argo-cd.readthedocs.io/en/stable/operator-manual/declarative-setup/#clusters)
 - [Cosign container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
-
-
-### Metrics API reliability and Argo health
-
-An HPA needs both its target's scale subresource and CPU metrics from `metrics.k8s.io`. A healthy frontend does not prove that autoscaling works. If `ScalingActive=False` reports `FailedGetResourceMetric`, investigate the Metrics API before changing Argo health rules. `AbleToScale=True` only confirms access to the scale target; it does not confirm access to CPU measurements.
-
-During the 2026-11-06 investigation, both QA and production HPA conditions reported an unavailable Metrics API. Metrics-server events confirmed liveness-driven restarts after one-second HTTPS probe timeouts; the previous process logs showed graceful shutdown, not an observed out-of-memory failure. The proposed reliability profile reserves 100m CPU, allows a 500m CPU burst, retains the 32Mi/128Mi memory request/limit, gives `/livez` a two-minute startup delay and allows five seconds per health check. `/readyz` continues to remove an unhealthy metrics-server from service. The pinned metrics-server chart does not render a dedicated `startupProbe`; the supported `livenessProbe.initialDelaySeconds` supplies this startup grace. This configuration needs reviewed installation and a live observation window before it is evidence of stability; it cannot compensate for an overloaded host.
-
-```bash
-kubectl --context kind-narx-commerce get apiservice v1beta1.metrics.k8s.io
-kubectl --context kind-narx-commerce get --raw /apis/metrics.k8s.io/v1beta1/nodes
-kubectl --context kind-narx-commerce -n commerce-qa describe hpa commerce-frontend
-kubectl --context kind-narx-commerce -n commerce-production describe hpa commerce-frontend
-kubectl --context kind-narx-commerce -n kube-system describe pod -l app.kubernetes.io/name=metrics-server
-kubectl --context kind-narx-commerce -n kube-system logs deployment/narx-metrics-server --previous
-```
-
-Check that `AbleToScale` and `ScalingActive` are true, metrics are fresh, and the metrics-server restart count stays unchanged over multiple HPA evaluation cycles. `ScalingLimited=True` at a configured minimum or maximum is a separate condition to interpret against the configured bounds. Preserve serving-certificate verification on the aggregated API; the existing kubelet self-signed certificate exception is specific to this local kind profile. See the [upstream Metrics Server requirements](https://github.com/kubernetes-sigs/metrics-server#requirements).
