@@ -1,0 +1,23 @@
+[Unit]
+Description=Narx Argo CD loopback origin for Cloudflare Tunnel
+Wants=network-online.target
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/kubectl --kubeconfig=/root/.kube/config --context=kind-narx-commerce --cache-dir=/run/narx-argocd-forward/cache --namespace=argocd port-forward --address=127.0.0.1 service/argocd-server 8080:443
+Restart=always
+RestartSec=5
+RuntimeDirectory=narx-argocd-forward
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
