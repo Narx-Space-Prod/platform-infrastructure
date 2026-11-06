@@ -1,0 +1,24 @@
+[Unit]
+Description=Narx %i loopback access for Cloudflare Tunnel
+Wants=network-online.target
+After=network-online.target docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/narx-access/%i.env
+ExecStart=/usr/bin/kubectl --kubeconfig=/root/.kube/config --context=kind-narx-commerce --cache-dir=/run/narx-access-%i/cache --namespace=${NAMESPACE} port-forward --address=127.0.0.1 service/${SERVICE} ${LOCAL_PORT}:${SERVICE_PORT}
+Restart=always
+RestartSec=5
+RuntimeDirectory=narx-access-%i
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

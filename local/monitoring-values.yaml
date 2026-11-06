@@ -41,6 +41,7 @@ prometheusOperator:
           memory: 96Mi
 prometheus:
   prometheusSpec:
+    externalUrl: https://narx-prometheus.narx.space
     replicas: 1
     retention: 6h
     retentionSize: 1GB
@@ -97,6 +98,7 @@ alertmanager:
 
           {{ end }}'
   alertmanagerSpec:
+    externalUrl: https://narx-alerts.narx.space
     replicas: 1
     secrets:
     - narx-monitoring-slack
@@ -118,6 +120,12 @@ alertmanager:
             requests:
               storage: 1Gi
 grafana:
+  grafana.ini:
+    server:
+      domain: narx-grafana.narx.space
+      root_url: https://narx-grafana.narx.space
+    security:
+      cookie_secure: true
   admin:
     existingSecret: narx-monitoring-grafana
     userKey: admin-user

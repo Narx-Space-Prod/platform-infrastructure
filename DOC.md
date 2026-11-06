@@ -1253,3 +1253,40 @@ curl -I https://argocd.narx.space/
 The unit explicitly selects the Narx context and binds only loopback. It reads this host's existing private root kubeconfig; adapt that path/User for a different operator installation. The cache is confined to its private runtime directory. Cloudflare credentials remain in the existing tunnel service, outside Git. No new tunnel, DNS route or router port forwarding is created. Keep TLS trust handling scoped to the loopback origin; use Cloudflare Access for the administration hostname. For permanent origin certificate verification, configure a trusted Argo serving certificate/CA rather than disabling verification globally.
 
 Diagnose a 502 using `journalctl -u cloudflared -u narx-argocd-forward --since '10 minutes ago' --no-pager`. Connection refused on 127.0.0.1:8080 means the origin forward is down. Certificate errors mean origin TLS settings need attention. Stop only the bridge with `sudo systemctl disable --now narx-argocd-forward.service`; cluster workloads are unaffected.
+
+
+## Persistent browser access for every Narx service
+
+`local/access.json` maps the approved hostnames to loopback ports and Kubernetes services. `local/narx-access@.service` runs one restartable forwarding instance per mapping. Existing Argo access stays in `narx-argocd-forward.service`. These host services add roughly 115 MiB for the six new forwards in the measured session. They use the explicit Narx context and never bind a LAN/public interface. The host and Narx node must be running for access to work.
+
+Install the forward template and generated environment files on this lab host:
+
+```bash
+sudo install -m 0644 local/narx-access@.service /etc/systemd/system/narx-access@.service
+sudo install -d -m 0755 /etc/narx-access
+sudo python3 - <<'PYTHON'
+import json
+from pathlib import Path
+for name, entry in json.loads(Path('local/access.json').read_text()).items():
+    path = Path('/etc/narx-access') / (name + '.env')
+    path.write_text('NAMESPACE={namespace}\nSERVICE={service}\nLOCAL_PORT={localPort}\nSERVICE_PORT={servicePort}\n'.format(**entry))
+    path.chmod(0o644)
+PYTHON
+sudo systemctl daemon-reload
+sudo systemctl enable --now narx-access@{dev,qa,production,grafana,prometheus,alertmanager}.service
+systemctl list-units 'narx-access@*' --no-pager
+```
+
+In the existing Cloudflare tunnel add published application routes using the hostnames in `local/access.json`, HTTP service type and `127.0.0.1:<localPort>` as origin. Only Argo uses the existing HTTPS origin on port 8080. Protect administration/monitoring hostnames with Cloudflare Access restricted to authorized identities before publishing them. Keep normal Argo/Grafana login enabled as well; Prometheus and Alertmanager need the Access boundary because their local endpoints have no user login. Do not configure a cache-everything rule for application API routes.
+
+Public browser URLs are `https://narx-dev.narx.space`, `https://narx-qa.narx.space`, `https://narx-prod.narx.space`, `https://argocd.narx.space`, `https://narx-grafana.narx.space`, `https://narx-prometheus.narx.space` and `https://narx-alerts.narx.space`. DNS/tunnel routes are configured in Cloudflare; enabling the local units does not create public DNS. Storefront GitOps values must use those exact HTTPS origins and secure cookies. A checksum on the frontend template ensures origin/cookie changes are loaded into its process; unrelated service templates remain unchanged. Local HTTP forwards are useful for health checks but login uses the HTTPS public origins once that GitOps configuration is deployed.
+
+Monitor with `journalctl -u narx-access@dev -n 30 --no-pager`. Restart one forward with `sudo systemctl restart narx-access@dev.service`; stop one with `sudo systemctl disable --now narx-access@dev.service`. Removing forwarding does not delete workloads or volumes.
+
+Argo's externally visible URL is set with:
+
+```bash
+kubectl --context kind-narx-commerce -n argocd patch cm argocd-cm --type merge -p '{"data":{"url":"https://argocd.narx.space"}}'
+```
+
+Monitoring Helm values set Grafana root URL and secure cookies plus Prometheus/Alertmanager external URLs. Apply the reviewed monitoring configuration with `local/observability.py` after merge; data volumes and existing credentials are retained.
