@@ -95,9 +95,37 @@ def plan_node_addresses(context, management_context, path):
     return plan
 
 
+def configure_repository_webhook(base):
+    config = json.loads((Path(__file__).resolve().parent / 'argocd.json').read_text())['webhook']
+    if config != {'repository': 'Narx-Space-Prod/platform-gitops',
+                  'url': 'https://argocd.narx.space/api/webhook', 'events': ['push']}:
+        raise ValueError('Unexpected repository webhook destination')
+    endpoint = 'repos/' + config['repository'] + '/hooks'
+    pages = json.loads(command('gh', 'api', '--paginate', '--slurp', endpoint + '?per_page=100'))
+    hooks = [h for page in pages for h in page if h.get('config', {}).get('url') == config['url']]
+    if len(hooks) > 1:
+        raise ValueError('Duplicate Argo webhooks require operator review')
+    current = json.loads(command(*base, '-n', 'argocd', 'get', 'secret', 'argocd-secret', '-o', 'json'))
+    encoded = current.get('data', {}).get('webhook.github.secret')
+    if hooks and not encoded:
+        raise ValueError('Existing webhook has no local secret; review rotation before changing it')
+    key = base64.b64decode(encoded, validate=True).decode() if encoded else secrets.token_hex(32)
+    if len(key) < 32:
+        raise ValueError('Webhook shared secret must be at least 32 characters')
+    # Patch only this key, preserving admin credentials and Argo signing keys.
+    command(*base, '-n', 'argocd', 'patch', 'secret', 'argocd-secret', '--type=merge',
+            '--patch-file=/dev/stdin', input=json.dumps({'stringData': {'webhook.github.secret': key}}))
+    payload = {'name': 'web', 'active': True, 'events': config['events'],
+               'config': {'url': config['url'], 'content_type': 'json', 'insecure_ssl': '0', 'secret': key}}
+    path = endpoint + ('/' + str(hooks[0]['id']) if hooks else '')
+    response = json.loads(command('gh', 'api', '--method', 'PATCH' if hooks else 'POST', path,
+                                  '--input', '-', input=json.dumps(payload)))
+    print('Configured signed GitOps push webhook:', response['id'])
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['prepare', 'register-cluster', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications', 'plan-node-addresses'])
+    parser.add_argument('operation', choices=['prepare', 'register-cluster', 'refresh-registry', 'configure-observer', 'configure-delivery-notifications', 'configure-repository-webhook', 'plan-node-addresses'])
     parser.add_argument('--context', required=True)
     parser.add_argument('--management-context')
     parser.add_argument('--environment', choices=['dev', 'qa', 'production'])
@@ -112,7 +140,7 @@ def main():
     args = parser.parse_args()
     if not args.context.startswith('kind-'):
         parser.error('This helper is only for an explicitly named local kind cluster')
-    if args.operation in {'prepare', 'register-cluster', 'refresh-registry'} and args.context != 'kind-narx-commerce':
+    if args.operation in {'prepare', 'register-cluster', 'refresh-registry', 'configure-repository-webhook'} and args.context != 'kind-narx-commerce':
         parser.error('Narx workloads must use the dedicated kind-narx-commerce context')
     if args.operation == 'plan-node-addresses':
         if not args.node_plan_file:
@@ -120,6 +148,9 @@ def main():
         plan_node_addresses(args.context, args.management_context, args.node_plan_file)
         return
     base = ['kubectl', '--context', args.context]
+    if args.operation == 'configure-repository-webhook':
+        configure_repository_webhook(base)
+        return
     def apply(value):
         command(*base, 'apply', '--server-side', '--field-manager=narx-local-bootstrap', '-f', '-', input=json.dumps(value))
     def notification_secret(values):

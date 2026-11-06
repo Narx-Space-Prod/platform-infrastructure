@@ -1290,3 +1290,25 @@ kubectl --context kind-narx-commerce -n argocd patch cm argocd-cm --type merge -
 ```
 
 Monitoring Helm values set Grafana root URL and secure cookies plus Prometheus/Alertmanager external URLs. Apply the reviewed monitoring configuration with `local/observability.py` after merge; data volumes and existing credentials are retained.
+
+
+## Event-driven delivery, correct status evidence and Slack notifications
+
+Delivery uses two independent GitHub event paths. Protected service CI publishes a signed immutable image and sends `release-published` to the GitOps repository. After a GitOps PR merges, a signed GitHub push webhook refreshes Argo CD. Argo performs its normal automatic sync, rollout analysis and smoke hook. The observer App publishes `narx/deploy-dev`, `narx/deploy-qa` or `narx/deploy-production`. GitHub Actions reacts to trusted observer success/failure status events and reconciles the next release state. A five-minute schedule remains a fallback, not the primary promotion trigger. Pending or unrelated status events are filtered before entering the reconciliation queue. Production review is still required.
+
+Status templates bind to `operationState.syncResult.revision`, the revision actually applied by the operation. They do not relabel older smoke evidence as a newer documentation commit. The trusted verifier accepts earlier evidence only within its existing deployment-configuration history window; a new chart, environment or application configuration stops that lookup. Success still requires Healthy/Synced plus a successful PostSync smoke job. Failure and pending evidence block advancement. Temporary target-health gaps wait for later observer events rather than requiring manual reconciliation.
+
+Custom Slack webhooks subscribe by their configured name: `notifications.argoproj.io/subscribe.narx-slack-deployed.slack: ""` and the matching failure annotation. `service.webhook.slack` and `webhook.slack` in notification templates refer to the same name. The Slack URL remains in `argocd-notifications-secret`; it must never be committed or printed. Configuration changes are validated with rendered message payloads; the first normal deployment notification verifies live delivery.
+
+The release bot waits for GitHub's PR head to match the exact pushed commit before enabling auto-merge. It preserves `--match-head-commit`, reuses existing auto-merge configuration, and handles a PR that merged while the API call was in flight. Retries are bounded; an unexpected head never gets merged. Production never enters this auto-merge function.
+
+Install the reviewed GitOps notification/AppSet changes on the dedicated Narx Argo, then configure the repository webhook:
+
+```bash
+python3 local/bootstrap.py configure-repository-webhook --context kind-narx-commerce
+gh api repos/Narx-Space-Prod/platform-gitops/hooks --jq '.[] | {id,active,events,url:.config.url,last_response}'
+```
+
+The helper uses your existing authenticated GitHub CLI admin access only to configure this one repository hook. It generates a random shared secret on first install, patches only `argocd-secret`'s `webhook.github.secret` key, and passes the same key to GitHub over stdin. Existing admin credentials and Argo signing keys remain untouched. On rerun it reuses the key and updates the matching hook rather than creating duplicates; duplicate hooks or an existing hook without the local secret require operator review. The endpoint and repository are pinned in `local/argocd.json`. Public HTTPS certificate verification remains enabled for GitHub deliveries.
+
+If Cloudflare Access protects Argo, permit the exact `/api/webhook` machine endpoint to receive GitHub requests without the interactive Access login; Argo verifies the shared-secret signature there. Keep the Argo UI/API protected. Verify a real GitOps push delivery returns a successful response in GitHub's webhook delivery history. Normal releases should then require only code review and Production review, with no CLI refresh, sync, or workflow-dispatch command between environments. Polling and manual recovery commands remain available for incidents. This webhook/bootstrap activation is an operator setup step, not a per-release task.
