@@ -15,7 +15,7 @@ SPEC.loader.exec_module(b)
 
 
 class ClusterRegistration(unittest.TestCase):
-    def run_registration(self, target='kind-narx-commerce', manager='kind-mega-local', token=True):
+    def run_registration(self, target='kind-narx-commerce', manager='kind-narx-commerce', token=True):
         calls = []
 
         def command(*args, input=None):
@@ -40,7 +40,7 @@ class ClusterRegistration(unittest.TestCase):
         self.assertFalse(any(doc['kind'] in {'ClusterRole','ClusterRoleBinding'} for doc in remote))
         roles = [doc for doc in remote if doc['kind'] == 'Role']
         self.assertEqual({r['metadata']['namespace'] for r in roles}, {'commerce-dev','commerce-qa','commerce-production'})
-        registrations = [doc for args, doc in writes if args[args.index('--context')+1] == 'kind-mega-local']
+        registrations = [doc for args, doc in writes if doc['metadata']['name'] == 'narx-local-cluster']
         self.assertEqual(len(registrations), 1)
         data = registrations[0]['stringData']
         self.assertEqual(data['server'], 'https://narx-commerce-control-plane:6443')

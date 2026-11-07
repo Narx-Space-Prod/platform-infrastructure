@@ -192,3 +192,10 @@ class RenderedPlatform(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class StandaloneContextGuard(unittest.TestCase):
+    def test_retired_management_cluster_is_rejected_before_render_or_write(self):
+        import sys,io,contextlib
+        with patch.object(sys,'argv',['observability.py','--context','kind-narx-commerce','--management-context','kind-mega-local','--integration-values','unused.yaml']),patch.object(obs,'run') as run,contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):obs.main()
+            run.assert_not_called()

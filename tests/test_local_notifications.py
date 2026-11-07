@@ -35,7 +35,7 @@ class DeliveryNotifications(unittest.TestCase):
 
     def execute(self):
         self.webhook_file.write_text(self.webhook)
-        argv=['bootstrap.py','configure-delivery-notifications','--context','kind-mega-local','--notifications-file',str(self.file),'--slack-webhook-file',str(self.webhook_file)]
+        argv=['bootstrap.py','configure-delivery-notifications','--context','kind-narx-commerce','--notifications-file',str(self.file),'--slack-webhook-file',str(self.webhook_file)]
         with patch.object(sys,'argv',argv),patch.object(b,'command',side_effect=self.command),contextlib.redirect_stdout(io.StringIO()) as output,contextlib.redirect_stderr(io.StringIO()):
             b.main()
         return output.getvalue()
