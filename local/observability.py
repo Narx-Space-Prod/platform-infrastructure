@@ -101,7 +101,7 @@ def prepare_credentials(kubectl, webhook_file):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', required=True, choices=['kind-narx-commerce'])
-    parser.add_argument('--management-context', choices=['kind-mega-local'])
+    parser.add_argument('--management-context', choices=['kind-narx-commerce'])
     parser.add_argument('--integration-values', type=Path, required=True)
     parser.add_argument('--cache', type=Path, default=ROOT.parents[1] / '.tools/platform-charts')
     parser.add_argument('--slack-webhook-file', type=Path)
