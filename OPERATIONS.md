@@ -1212,6 +1212,57 @@ python3 scripts/delivery.py --help
 # Prefer the hosted Recovery workflow; don't run a bare rollback CLI without its prerequisites.
 ```
 
+### Failure-only recovery dispatch: activation and operation
+
+The failure-only dispatcher replaces the broad GitHub `status` trigger after the GitOps consumer migration. Until that consumer change merges, legacy status-triggered recovery remains active. The producer refuses to dispatch or mark an event delivered before main supports `recovery-requested`.
+
+It runs on the Narx host every two minutes, reads only the dedicated cluster's Argo Applications and selects failed/degraded QA/Production operations. It requires the latest matching commit status to be a failure from the exact observer login/account ID. Healthy checks make no GitHub API calls and create no Actions runs. Duplicate status IDs are persisted locally. Missing observer evidence is retried on the next tick; API failures never bypass validation.
+
+This is a local-systemd dependency, not a GitHub-hosted monitor. If this host/timer is down, dispatch is delayed; Argo/Rollouts' own mechanisms remain separate. Check the timer/journal during operations. Existing skipped run history is not deleted.
+
+**Activation order:** merge the infrastructure dispatcher PR, install/verify its timer while legacy recovery is still enabled, then merge the GitOps consumer PR that removes `on: status`. Do not reverse that order. No new App permissions or personal token are needed. The existing release App key is used only to mint short-lived contents-write tokens scoped to platform-gitops. Observer identity remains separate. Production review and the shared writer lock remain mandatory.
+
+From infrastructure main after its reviewed merge (the variables below refer to existing private key paths, never key contents):
+
+```bash
+set -euo pipefail
+# Set this to the existing owner-only Narx release App PEM outside all repositories.
+export NARX_RELEASE_KEY_FILE=/home/subhankar/boutique-credentials/narx-local-commerce-release.2026-11-04.private-key.pem
+install -d -m 700 /etc/narx-recovery /opt/narx-recovery /var/lib/narx-recovery
+install -m 600 "$NARX_RELEASE_KEY_FILE" /etc/narx-recovery/release-app.pem
+install -m 644 local/recovery_dispatcher.py /opt/narx-recovery/recovery_dispatcher.py
+python3 - <<'PYRECOVERY'
+import json, os
+from pathlib import Path
+path = Path('/etc/narx-recovery/config.json')
+path.write_text(json.dumps({'appId': 5613524, 'installationId': 178600148,
+                           'privateKeyFile': '/etc/narx-recovery/release-app.pem'}) + '\n')
+os.chmod(path, 0o600)
+PYRECOVERY
+# Dry-run never mints a writer token, sends an event or records delivery.
+python3 local/recovery_dispatcher.py --state /var/lib/narx-recovery/state.json
+install -m 644 local/narx-recovery-dispatch.service local/narx-recovery-dispatch.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now narx-recovery-dispatch.timer
+systemctl start narx-recovery-dispatch.service
+systemctl status narx-recovery-dispatch.timer --no-pager
+journalctl -u narx-recovery-dispatch.service -n 30 --no-pager
+```
+
+Use this organization's current App/installation IDs; a different organization needs its own installation. The copied PEM is a second private credential copy: rotate it together with its source key and restrict root/operator access. Keep kubeconfig and this state/config out of Git and backups shared publicly.
+
+A successful healthy check is silent. The service is oneshot and normally inactive between timer ticks; inspect the timer plus last service result, rather than interpreting inactive as failure:
+
+```bash
+systemctl list-timers narx-recovery-dispatch.timer --all
+systemctl show narx-recovery-dispatch.service -p Result -p ExecMainStatus
+journalctl -u narx-recovery-dispatch.service --since '1 hour ago' --no-pager
+```
+
+Recovery dispatch has an additional roughly two-minute detection delay plus runner/observer delays. Its payload binds environment, operation revision and failure status ID. Under the writer lock, GitOps rechecks the dispatcher identity, current relevant revision, latest observer status and predecessor. A stale event exits without proposing a rollback; no request can force rollback of a now-healthy release.
+
+Do not disable the timer after removing the legacy trigger unless deliberately transferring recovery ownership. For a rollback of this **migration**, restore the reviewed legacy trigger first, then stop the timer; restoring only the producer does not restore GitHub event consumption.
+
 ### 16.5 Recover a platform Helm upgrade
 
 Application rollback and platform Helm rollback are different ownership paths. For a failed monitoring upgrade inspect Helm history, PVC state and events. On the dedicated lab, select an explicitly known good revision before a manual platform recovery:
