@@ -7,7 +7,6 @@ After=network-online.target docker.service
 Type=oneshot
 User=root
 Environment=KUBECONFIG=/root/.kube/config
-Environment=HOME=/run/narx-recovery
 ExecStart=/usr/bin/python3 /opt/narx-recovery/recovery_dispatcher.py --state /var/lib/narx-recovery/state.json --config /etc/narx-recovery/config.json --dispatch
 StateDirectory=narx-recovery
 StateDirectoryMode=0700

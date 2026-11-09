@@ -47,12 +47,6 @@ spec:
       port: 8090
   - to:
     - ipBlock:
-        cidr: 172.18.0.0/16
-    ports:
-    - protocol: TCP
-      port: 32082
-  - to:
-    - ipBlock:
         cidr: 0.0.0.0/0
         except:
         - 10.0.0.0/8
@@ -71,6 +65,16 @@ spec:
     ports:
     - protocol: TCP
       port: 9153
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: argocd
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: argocd-application-controller
+    ports:
+    - protocol: TCP
+      port: 8082
 ---
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy

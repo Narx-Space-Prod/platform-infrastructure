@@ -6,7 +6,7 @@ For installation, App/secret configuration, cluster setup, access and recovery c
 
 Scope: `Narx-Space-Prod`'s six local Commerce repos. No Jenkins or AWS provisioning is part of this delivery flow. One retained Terraform validation helper is described because infrastructure CI still calls it; it does not apply cloud resources.
 
-Reviewed against current code on 7 November 2026. The full master previously completed CI, Dev, isolated business E2E, QA and approved Production verification. The newer separately named Production-approval node is implemented/tested in the code; this guide does not claim it has already been demonstrated in a fresh live release. A guide is not test evidence.
+Reviewed against the local-project audit on 9 November 2026. [Master run 42454990488](https://github.com/Narx-Space-Prod/platform-gitops/actions/runs/42454990488) completed source gates, Dev, business E2E, QA, explicit Production PR approval and Production verification on 8 November. This proves that run, not every future change. The coordinated cleanup PRs adopt the single shared revision below; inspect the caller on the branch/run you are diagnosing during migration.
 
 ## Contents
 
@@ -204,21 +204,14 @@ The three source callers currently pin:
 
 ```text
 platform-ci/.github/workflows/application.yml
-@42e51ee5738bf9c9970ec277f2fb8edf0287fc44
+@4445455dd22c076a27b1bb35d46f645d354ade05
 ```
 
-The newer library-main labelling commit changes display names, not their active behavior. Don't infer that a service has adopted new shared code merely because the library's main branch contains it.
+Every nested workflow in `application.yml` uses a local `./.github/workflows/NAME.yml` reference and therefore resolves from the same entry-workflow commit. Policy, build, Sonar, publication, intake, release records and evidence move together as one reviewed library release.
 
-The pinned application wrapper resolves its local `./.github/workflows/build.yml`, `intake.yml`, `release.yml` and `evidence.yml` from **that shared-workflow commit**. It also deliberately calls these reviewed helpers:
+The runtime integration **composite action** remains independently pinned to `bee471591c8b97eb389f91f5abfc95e09ee85a1d`. Workspace-local composite resolution differs from nested reusable-workflow resolution, so replacing it with `./integration` in an application caller would point at the wrong checkout.
 
-| Dependency | Reviewed revision in the current application wrapper |
-| --- | --- |
-| Source policy `workflows.yml` | `666b596743c0fd43a0ba3ed1efb8dc7b89b7593e` |
-| Sonar `sonar.yml` | `5c5e186e8b028a62ed002af36595281429505659` |
-| Publisher `service.yml` | `35ff4ae9d506db00dbc2adc7ec027382bbe99db3` |
-| Runtime integration composite | `bee471591c8b97eb389f91f5abfc95e09ee85a1d` from the build helper |
-
-Different pins are deliberate, not automatically duplication. A workflow path/commit is part of the publisher certificate identity accepted by GitOps; changing it needs policy migration.
+The publisher workflow path and revision are part of signing identity. GitOps trusts the selected release revision and retains older reviewed publisher identities for historical image verification/rollback. Updating the library main branch does not silently update service callers.
 
 The GitOps master and its local reusable helpers resolve from the GitOps run's workflow revision. Control scripts are checked out at that revision; fresh environment release state is read separately from fetched Git. This avoids executing a different control script in each stage merely because main moved during the release.
 
@@ -229,8 +222,8 @@ Assume the six repositories are siblings and start from their parent directory:
 ```bash
 grep 'uses: Narx-Space-Prod/platform-ci' commerce-orders/.github/workflows/ci.yml
 git -C platform-ci fetch origin main
-git -C platform-ci show 42e51ee5738bf9c9970ec277f2fb8edf0287fc44:.github/workflows/application.yml
-git -C platform-ci show 35ff4ae9d506db00dbc2adc7ec027382bbe99db3:.github/workflows/service.yml
+git -C platform-ci show 4445455dd22c076a27b1bb35d46f645d354ade05:.github/workflows/application.yml
+git -C platform-ci show 4445455dd22c076a27b1bb35d46f645d354ade05:.github/workflows/service.yml
 ```
 
 `git show SHA:path` reads immutable source without switching branches or modifying the working tree. For an actual run, inspect its recorded revision and referenced workflows rather than assuming it used today's main.
@@ -270,7 +263,7 @@ jobs:
       actions: read
       id-token: write
       packages: write
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/application.yml@42e51ee5738bf9c9970ec277f2fb8edf0287fc44
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/application.yml@4445455dd22c076a27b1bb35d46f645d354ade05
     with:
       application: orders
     secrets:
@@ -654,7 +647,7 @@ GitHub auto-merge means “merge when all applicable requirements are satisfied,
 
 Read `.github/workflows/recovery.yml`, then the recovery functions in `scripts/delivery.py`.
 
-Automatic recovery is based on trusted deployment failure statuses in QA/Production. The failure-only migration documented in OPERATIONS.md moves the initial filter into the local systemd dispatcher, which sends `recovery-requested` only after observing an actual trusted failure. The consumer PR removes the broad GitHub `status` trigger only after the producer timer is installed; until then, legacy status events remain the active path. It requires the expected observer account/context and current failed bundle. A stale failure cannot authorize rolling back a different healthy release. Dev has no automatic rollback; manual recovery supports all three environments.
+Automatic recovery consumes a `recovery-requested` event for a trusted QA/Production failure. A local systemd timer filters failed/degraded Argo operations, checks the latest matching observer status and sends one event per failure status. Healthy checks create no Actions run. Under the writer lock, GitOps rechecks dispatcher identity, relevant revision, exact latest observer failure and current bundle. Stale events cannot roll back a now-healthy release. Dev has no automatic rollback; manual recovery supports all three environments.
 
 Recovery uses the same serialized writer helper as promotion. It verifies the stored predecessor's facts, signatures and successful deployment evidence, then proposes a rollback PR. A rollback is an auditable GitOps change, not an invisible `kubectl set image` that Argo later reverses. Production review remains applicable.
 

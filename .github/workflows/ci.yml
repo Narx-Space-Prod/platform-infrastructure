@@ -14,13 +14,13 @@ concurrency:
 
 jobs:
   workflows:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@f907416baf6ffca41626f10df94f7631d86de8c0
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/workflows.yml@4445455dd22c076a27b1bb35d46f645d354ade05
   terraform:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@6e58479d8ce607e66411750d046f314c8a4e4534
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@4445455dd22c076a27b1bb35d46f645d354ade05
     with:
       working-directory: bootstrap
   registry:
-    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@6e58479d8ce607e66411750d046f314c8a4e4534
+    uses: Narx-Space-Prod/platform-ci/.github/workflows/terraform.yml@4445455dd22c076a27b1bb35d46f645d354ade05
     with:
       working-directory: delivery
   local:
@@ -50,7 +50,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Narx-Space-Prod/platform-gitops
-          ref: 1f0c3a4887a5c22b6c9760a70db129e3ad360bd5
+          ref: 31ed51edcb47870f91e09a826627cf3d8330141b
           path: narx-monitoring-data
           persist-credentials: false
       - name: Render checksum-pinned platform charts without installing
