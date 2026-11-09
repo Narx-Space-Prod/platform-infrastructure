@@ -90,7 +90,7 @@ class BootstrapSafety(unittest.TestCase):
             self.assertEqual(command.call_count, 1)
 
     def test_shared_argo_ingress_opens_only_controller_metrics_to_private_bridge(self):
-        resources = json.loads((ROOT/'local/argocd-metrics.json').read_text())['items']
+        resources = list(yaml.safe_load_all((ROOT/'local/argocd-metrics.yaml').read_text()))
         policy = next(d for d in resources if d['kind']=='NetworkPolicy')
         self.assertEqual(policy['metadata']['namespace'], 'argocd')
         self.assertEqual(policy['spec']['podSelector']['matchLabels'],

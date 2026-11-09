@@ -153,7 +153,7 @@ def main():
         prepare_credentials(kubectl, args.slack_webhook_file)
         run(*kubectl, 'apply', '--server-side', '--field-manager=narx-observability', '-f', str(ROOT / 'monitoring-network.yaml'))
         run('kubectl', '--context', args.management_context, 'apply', '--server-side',
-            '--field-manager=narx-observability', '-f', str(ROOT / 'argocd-metrics.json'))
+            '--field-manager=narx-observability', '-f', str(ROOT / 'argocd-metrics.yaml'))
         for record, archive, values in prepared:
             print('Installing/upgrading ' + record['release'])
             # Do not print rendered manifests or credentials. Helm owns release state.

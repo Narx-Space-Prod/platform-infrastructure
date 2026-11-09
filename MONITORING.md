@@ -95,13 +95,13 @@ A silence suppresses notifications for matched alerts; it does not repair the se
 | `local/metrics-values.yaml` | Metrics API provider, TLS exception and startup behavior |
 | `local/probes-values.yaml` | Blackbox HTTP module and budgets |
 | `local/monitoring-network.yaml` | Monitoring isolation and selected API/kubelet access |
-| `local/argocd-metrics.json` | Argo controller metrics Service and ingress policy |
+| `local/argocd-metrics.yaml` | Argo controller metrics Service and ingress policy |
 | GitOps `monitoring/local-values.yaml` | Application scrape jobs, alert rules, dashboard JSON expressed as YAML |
 | GitOps `monitoring/rules.test.yml` | Synthetic Prometheus rule tests |
-| GitOps `applications/notifications.json` | Argo GitHub status and Slack triggers/templates |
+| GitOps `applications/notifications.yaml` | Argo GitHub status and Slack triggers/templates |
 | Infrastructure `local/bootstrap.py` | Observer and Slack secret/configuration operations |
 | Infrastructure `local/access.json`, systemd units | Permanent loopback/browser access mapping |
-| GitOps `applications/local/commerce.json` | Application notification subscriptions/environment labels |
+| GitOps `applications/local/commerce.yaml` | Application notification subscriptions/environment labels |
 
 Monitoring platform releases are operator-installed through the tracked helper, not reconciled by the three workload Argo Applications. Editing GitOps monitoring integration data does not by itself reinstall the platform Helm release. Rendering/applying the reviewed overlay is a distinct operation.
 
@@ -189,7 +189,7 @@ Grafana has a 1 Gi PVC and an existing admin Secret. Its public domain/root URL 
 
 ### Network policy
 
-Monitoring namespace policy allows internal monitoring communication, DNS, selected application ports, public HTTPS and selected legacy Argo NodePort access. Cilium policies grant API access only to labeled components and kubelet/node-exporter access to labeled Prometheus Pods. `argocd-metrics.json` supplies a NodePort Service targeting controller metrics on 8082.
+Monitoring namespace policy allows internal monitoring communication, DNS, selected application ports, public HTTPS and selected legacy Argo NodePort access. Cilium policies grant API access only to labeled components and kubelet/node-exporter access to labeled Prometheus Pods. `argocd-metrics.yaml` supplies a NodePort Service targeting controller metrics on 8082.
 
 A hardcoded `172.18.0.0/16` Docker-network allowance is environment-specific; it is not portable evidence of correct routing on every host. Verify the actual kind network before copying it. Network policy reachability and TLS/authentication are separate checks.
 
@@ -415,7 +415,7 @@ A direct test POST only proves transport to the webhook. A deliberate synthetic 
 
 ## 11. Argo deployment evidence and delivery Slack
 
-These are independent of Prometheus alert evaluation. Read `applications/notifications.json` as a ConfigMap data patch, not a standalone complete Kubernetes resource.
+These are independent of Prometheus alert evaluation. Read `applications/notifications.yaml` as a ConfigMap manifest. The bootstrap helper merges its project-owned `data` keys into the live ConfigMap so other integrations are preserved.
 
 ### GitHub observer templates/triggers
 

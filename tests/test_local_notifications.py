@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import yaml
 from unittest.mock import patch
 
 SPEC=importlib.util.spec_from_file_location('local_bootstrap',Path(__file__).resolve().parents[1]/'local/bootstrap.py')
@@ -50,6 +51,16 @@ class DeliveryNotifications(unittest.TestCase):
         config=next(v for args,v in writes if 'configmap' in args)
         self.assertEqual(set(config['data']),{'service.webhook.slack','trigger.narx-slack-deployed','template.narx-slack-deployed'})
         self.assertNotIn('service.slack',config['data'])
+
+    def test_yaml_manifest_preserves_the_same_project_owned_patch(self):
+        data=json.loads(self.file.read_text())['data']
+        self.file=self.file.with_suffix('.yaml')
+        self.file.write_text(yaml.safe_dump({'apiVersion':'v1','kind':'ConfigMap',
+            'metadata':{'name':'argocd-notifications-cm','namespace':'argocd'},'data':data}))
+        self.execute()
+        writes=[json.loads(value) for args,value in self.calls if value is not None and 'configmap' in args]
+        self.assertEqual(set(writes[0]),{'data'})
+        self.assertEqual(writes[0]['data']['service.webhook.slack'],self.service)
 
     def test_existing_different_webhook_service_is_not_overwritten(self):
         self.current['data']['service.webhook.slack']='url: $another-project-key\n'

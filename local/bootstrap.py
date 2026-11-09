@@ -11,6 +11,8 @@ from pathlib import Path
 import secrets
 import subprocess
 import time
+
+import yaml
 from urllib.parse import urlparse
 
 
@@ -119,7 +121,7 @@ def main():
     if args.operation == 'configure-delivery-notifications':
         if not args.notifications_file or not args.slack_webhook_file:
             parser.error('Delivery notifications need --notifications-file and an independent --slack-webhook-file')
-        source = json.loads(args.notifications_file.read_text())['data']
+        source = yaml.safe_load(args.notifications_file.read_text())['data']
         data = {k:v for k,v in source.items() if k == 'service.webhook.slack' or k.startswith(('trigger.narx-slack-', 'template.narx-slack-'))}
         if not data or not data.get('service.webhook.slack', '').startswith('url: $narx-slack-webhook\n'):
             parser.error('The reviewed Slack service must reference the dedicated Narx secret key')
@@ -139,7 +141,7 @@ def main():
         if not (args.app_id and args.app_id.isdecimal() and args.installation_id and args.installation_id.isdecimal()
                 and args.private_key_file and args.notifications_file):
             parser.error('Observer configuration needs numeric --app-id/--installation-id, --private-key-file and --notifications-file')
-        data = json.loads(args.notifications_file.read_text())['data']
+        data = yaml.safe_load(args.notifications_file.read_text())['data']
         if not data or any((not k.startswith(('trigger.narx-', 'template.narx-')) and k != 'service.webhook.slack') or not isinstance(v, str) for k, v in data.items()):
             parser.error('Notification patch may contain only Narx templates and triggers')
         data = {k:v for k,v in data.items() if k != 'service.webhook.slack' and not k.startswith(('trigger.narx-slack-', 'template.narx-slack-'))}

@@ -319,7 +319,7 @@ PostSync runs after resources have reached the appropriate healthy sync state. I
 
 ## 8. ApplicationSet and AppProject line by line
 
-Read `platform-gitops/applications/local/commerce.json`. JSON is a valid representation of Kubernetes resources; the file is a `v1 List` containing an AppProject and ApplicationSet.
+Read `platform-gitops/applications/local/commerce.yaml`. The file contains two ordinary YAML documents separated by `---`: an AppProject and an ApplicationSet.
 
 ### AppProject `narx-commerce-local`
 
@@ -371,7 +371,7 @@ The signed GitHub push webhook at `/api/webhook` accelerates refresh. Polling st
 
 ### Deployment evidence
 
-`applications/notifications.json` defines pending/success/failure GitHub statuses on the actual operation revision. Success requires a successful operation, Synced/Healthy state and successful PostSync smoke-hook evidence, not just a green health badge. The dedicated observer identity is checked by delivery code.
+`applications/notifications.yaml` defines pending/success/failure GitHub statuses on the actual operation revision. Success requires a successful operation, Synced/Healthy state and successful PostSync smoke-hook evidence, not just a green health badge. The dedicated observer identity is checked by delivery code.
 
 The pipeline waits for that exact trusted evidence; Jenkins is uninvolved. Slack delivery summaries are separate and their failure must not be mistaken for a healthy Kubernetes proof. See MONITORING.md for trigger/template fields and transport troubleshooting.
 
@@ -588,7 +588,7 @@ Application rollback is not database restore. Backward-compatible migrations and
 - `local/compose.yaml` and `.env.example`: disposable/developer preview definitions, not Kubernetes desired state. A private `.env` is not documentation input.
 - `policy/builders.json` and delivery Python: image trust/promotion policy, explained in the CI/CD guide.
 - `local/argocd.json`: reviewed Argo manifest pin and webhook route.
-- `local/argocd-metrics.json`: NodePort metrics Service and ingress policy; see monitoring guide for its legacy target issue.
+- `local/argocd-metrics.yaml`: NodePort metrics Service and ingress policy; see monitoring guide for its legacy target issue.
 - `local/access.json` and systemd units: host access mapping and process supervision.
 
 ### Learning exercises
