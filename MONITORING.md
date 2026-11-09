@@ -133,7 +133,7 @@ Requires exactly the three Commerce namespaces and exactly the five reviewed scr
 - `additionalPrometheusRulesMap`;
 - Grafana provisioned dashboard JSON.
 
-The function does not automatically rewrite stale targets, runbook links or install a missing logging backend. Namespace/job-name validation is a useful contract, not semantic validation of every address and expression.
+The overlay checks the dedicated Argo Service address as well as namespace/job identity. It rejects retired shared-cluster targets. It does not install a logging backend or validate every possible PromQL error; rule and render tests cover separate contracts.
 
 ### `require_capacity(...)`
 
@@ -189,9 +189,7 @@ Grafana has a 1 Gi PVC and an existing admin Secret. Its public domain/root URL 
 
 ### Network policy
 
-Monitoring namespace policy allows internal monitoring communication, DNS, selected application ports, public HTTPS and selected legacy Argo NodePort access. Cilium policies grant API access only to labeled components and kubelet/node-exporter access to labeled Prometheus Pods. `argocd-metrics.yaml` supplies a NodePort Service targeting controller metrics on 8082.
-
-A hardcoded `172.18.0.0/16` Docker-network allowance is environment-specific; it is not portable evidence of correct routing on every host. Verify the actual kind network before copying it. Network policy reachability and TLS/authentication are separate checks.
+Monitoring namespace policy allows internal monitoring communication, DNS, selected application ports, public HTTPS and direct controller-metrics access in the Argo namespace. Cilium policies grant selected API/kubelet access. `argocd-metrics.yaml` contains only the ingress policy; the upstream Argo installation already owns the `argocd-metrics` ClusterIP Service. The ingress peer requires both the monitoring namespace and Prometheus Pod label. Matching egress selects the Argo namespace/controller and TCP 8082. No Docker bridge CIDR or metrics NodePort is needed.
 
 ## 6. Every scrape job and relabeling rule
 
@@ -219,13 +217,11 @@ Prometheus therefore contacts the exporter, which contacts the Pod. `up=1` on th
 
 These are internal Pod probes. They do not test public DNS, Cloudflare, browser TLS, login cookies or an actual customer checkout.
 
-### `narx-argocd`: a tracked legacy target
+### `narx-argocd`
 
-The current integration file still contains static target `mega-local-control-plane:32082`, inherited from the previous shared-management layout. The current dedicated node is `narx-commerce-control-plane`. **The installer does not rewrite that address.** Do not assume this scrape works on a fresh standalone rebuild.
+The static target is `argocd-metrics.argocd.svc:8082`, the existing upstream Argo controller metrics Service in the dedicated cluster. It keeps selected application/sync metrics and Narx Application names, then derives environment from `narx-commerce-ENV`.
 
-The job keeps selected Argo metrics and Narx Application names, then derives environment from `narx-commerce-ENV`. The NodePort exposure is defined in infrastructure. A future reviewed configuration correction should align the target/network path with the dedicated cluster, or use an appropriately secured same-cluster Service address. This documentation task does not silently change that runtime configuration.
-
-To establish actual installed behavior, inspect the live Prometheus targets/config after private access. Helm may currently contain a value different from tracked source; that is drift to reconcile, not proof the tracked target is correct.
+Both ingress and egress are restricted by namespace/Pod identity. The platform overlay rejects a retired shared-node target instead of silently installing it. Changes to integration data need an explicit reviewed monitoring upgrade; merging the configuration alone does not update the operator-owned Helm release.
 
 ## 7. PromQL through project examples
 
@@ -326,11 +322,10 @@ A dropdown entry cannot create missing metric labels. If Production is empty, in
 | JVM heap usage | Heap memory gauge | Heap only, not full container RSS/native memory |
 | Frontend rollout phase | Rollout phase info series | Progressive-delivery state |
 | Active Narx alerts | Firing ALERTS series | Current matching alert state |
-| Application logs | Loki query | Requires Loki datasource/backend not installed by this inventory |
 
 Some legend templates mention labels dropped by aggregation (for example `pod` after `sum by(service)`); those labels cannot magically appear. Treat this as a presentation limitation. The custom p95/error panels do not cover all Java metrics simply because Orders appears in another panel.
 
-The provisioned log panel references data-source UID `loki`, but the configured datasource set contains only Prometheus. Do not interpret an empty/broken logs panel as proof that application logs do not exist. Use private `kubectl logs`, and treat centralized logging as an explicit future platform addition.
+The dashboard contains only panels backed by the configured Prometheus datasource. There is no placeholder Loki panel. Centralized logging remains a separate platform capability; use private `kubectl logs` for current Pod inspection.
 
 For login, use the private credential procedure in OPERATIONS section 10.3. The initial admin Secret may differ from a password later changed in Grafana's persistent database. Resetting/deleting the PVC to bypass a forgotten password risks dashboards/settings and is not the first diagnostic step.
 
@@ -358,7 +353,7 @@ The integration has 15 project rules. Their durations intentionally avoid firing
 
 Upstream Kubernetes default rules are additional to these project rules. The Alertmanager route only sends matching project/severity labels to the Narx Slack receiver; enabling a default rule does not prove that it reaches this channel.
 
-Every current project rule still contains a `runbook_url` pointing to removed `DOC.md#local-monitoring-and-progressive-delivery`. The rule test fixture expects that same old URL. This is a tracked stale link, not a working runbook. Use this guide/OPERATIONS for diagnosis; updating rule annotations and expected tests together requires a reviewed configuration change.
+Project `runbook_url` annotations point to this guide's troubleshooting section. Rule fixtures assert those links together with alert behavior, so removed documentation paths are not presented as working runbooks.
 
 ### Rule testing
 
@@ -468,7 +463,7 @@ python3 local/observability.py --context kind-narx-commerce \
   --render-dir /tmp/narx-monitoring-render
 ```
 
-This downloads/checksums/renders but does not install. Inspect the rendered job addresses, namespace labels, network paths, rules and data-source UIDs. The legacy Argo target and stale runbook/log-panel references discussed above remain in that output; do not install and assume the helper fixed them.
+This downloads/checksums/renders but does not install. Inspect the rendered job addresses, namespace labels, network paths, rules and data-source UIDs. Check that the Argo target uses the dedicated internal Service and every panel has a configured datasource before installing.
 
 ### Explicit install/upgrade
 
@@ -587,9 +582,6 @@ The current code supports useful production patterns: scoped discovery, versione
 
 These concrete limitations are visible in tracked code:
 
-- Legacy Argo static target still references the retired shared-management node; the installer does not rewrite it.
-- Alert annotations and fixture expectations still point at removed DOC.md.
-- The dashboard contains a Loki panel without a Loki datasource/backend in this platform inventory.
 - Internal readiness probes do not test public DNS/TLS/tunnel/user journeys.
 - `up == 0` does not cover every disappeared target; complete absence detection needs additional design.
 - Project rule tests cover selected scenarios, not every rule/label/missing-data case.
@@ -597,7 +589,7 @@ These concrete limitations are visible in tracked code:
 - Short local retention and single-node failure domain cannot provide durable, independent monitoring during laptop failure.
 - No complete SLO/error-budget policy, distributed tracing or independently hosted dead-man notification path is defined here.
 
-These are documented findings, not changes made by this task. Runtime fixes should be separate reviewed configuration changes with rendering, rule tests and focused live verification. Do not describe an uninstalled backend or an unreachable target as working merely to make the architecture look complete.
+The audit removed the stale shared-node target, broken runbook links and unsupported log panel in tracked configuration. Apply/verify the reviewed monitoring upgrade separately. The remaining limitations above require their own scoped platform work; code cleanup does not turn a single-node lab into highly available monitoring.
 
 A useful acceptance record includes versions, installed chart revisions, target coverage per environment, rule health, dashboard screenshots without secrets, one authorized alert-and-resolution delivery, observer status identity/revision and resource headroom. Record the date because a green snapshot is not permanent proof.
 
@@ -614,7 +606,7 @@ A useful acceptance record includes versions, installed chart revisions, target 
 7. Add a negative/missing-data fixture on a feature branch before changing a rule.
 8. Inspect a Production deployment status and prove its observer identity and Git revision.
 9. Explain why a healthy App without smoke evidence should not satisfy the delivery gate.
-10. Diagnose the legacy Argo target and Loki panel using rendered configuration, without pretending their presence proves functionality.
+10. Trace the Argo metrics Service through ingress/egress policy to Prometheus and verify no panel refers to an unconfigured datasource.
 
 After read-only learning, perform a planned test alert and recovery drill in the authorized channel/window. Review what fired, who received it, what evidence guided diagnosis and how the system recovered. That operational reasoning matters more than the number of dashboards installed.
 

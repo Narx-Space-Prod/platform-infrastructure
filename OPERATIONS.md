@@ -6,7 +6,7 @@ This is an operational learning wiki, not a list of unexplained installation com
 
 **Source of truth:** the checked-out code, its pinned dependencies and your reviewed Git history. This guide describes the current local design reviewed on 7 November 2026. It is not a claim that all commands below were executed against a freshly erased host: the existing platform completed an end-to-end release, while installation instructions are reconstructed from the tracked configuration and upstream installation guidance. Do not erase the working cluster to practise a rebuild.
 
-The newer separate Production-PR waiting stage was tested locally; do not confuse that with a completed live exercise of that new UI stage. The previously completed master verified actual approved Production delivery.
+The explicit Production-PR approval stage and subsequent rollout verification completed in master run 42454990488 on 8 November 2026. That is historical evidence; new changes require their own checks.
 
 ## Contents
 
@@ -513,16 +513,16 @@ kubectl --context kind-narx-commerce get storageclass
 
 Expected: node Ready, Cilium/operator and CoreDNS ready, and kind's `standard` storage class present. The profile retains kube-proxy; Hubble/Envoy are not enabled merely for a demo UI.
 
-The local network files include reviewed Docker/API CIDRs. Inspect the actual network before applying them to a rebuilt host:
+The local Argo scrape uses its internal Kubernetes Service and namespace/Pod selectors. It does not depend on a fixed Docker bridge subnet. Inspect node networking and the actual policies before changing connectivity:
 
 ```bash
 docker network inspect kind --format '{{json .IPAM.Config}}'
 docker inspect narx-commerce-control-plane --format '{{json .NetworkSettings.Networks}}'
-grep -n '172\.' local/argocd-metrics.yaml
-grep -R -n 'cidr:' ../platform-gitops/environments ../platform-gitops/charts
+cat local/argocd-metrics.yaml
+cat local/monitoring-network.yaml
 ```
 
-If Docker selected a different subnet, update the affected reviewed CIDR configuration through a PR. Do not reconnect live nodes with commands from an old four-node/shared-cluster address plan; that tool was retired.
+Retained managed-data chart settings may include reviewed CIDRs for their own purpose. Do not use an old shared-cluster node-reconnection plan to repair this standalone cluster.
 
 ## 8. Install Argo CD and progressive-delivery APIs
 
@@ -1572,6 +1572,12 @@ gh pr list --repo "$NARX_ORG/platform-gitops"
 ```
 
 A healthy snapshot is useful, not proof of long-term capacity or security. Check recent restarts, Pending Pods, alert delivery, backup freshness and credential expiry as part of operation.
+
+### Source readability conventions
+
+Each local repository has an `.editorconfig`: UTF-8, LF, final newline, two-space declarative/JavaScript/Java indentation, four-space Python indentation and Go tabs. The audit used Ruff 0.14.4, Prettier 3.6.2, prettier-plugin-java 2.7.1 and @prettier/plugin-xml 3.4.2. These are development tools, not new runtime dependencies. Do not format applied Flyway migrations, certificates, dependency locks or upstream-generated schemas as ordinary source; their checksums/provenance have a different purpose.
+
+Application identifiers use Narx naming: frontend package `narx-commerce-frontend`, Go module `github.com/Narx-Space-Prod/commerce-catalogue`, and Java package `space.narx.commerce.orders`. Existing `boutique_*` metric names are retained as telemetry contracts and remain scoped by the `project` label.
 
 ### 19.2 Local policy-test commands
 

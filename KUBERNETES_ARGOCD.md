@@ -588,7 +588,7 @@ Application rollback is not database restore. Backward-compatible migrations and
 - `local/compose.yaml` and `.env.example`: disposable/developer preview definitions, not Kubernetes desired state. A private `.env` is not documentation input.
 - `policy/builders.json` and delivery Python: image trust/promotion policy, explained in the CI/CD guide.
 - `local/argocd.json`: reviewed Argo manifest pin and webhook route.
-- `local/argocd-metrics.yaml`: NodePort metrics Service and ingress policy; see monitoring guide for its legacy target issue.
+- `local/argocd-metrics.yaml`: namespaced ingress policy for the upstream Argo metrics Service; no separate metrics Service or NodePort is needed.
 - `local/access.json` and systemd units: host access mapping and process supervision.
 
 ### Learning exercises
