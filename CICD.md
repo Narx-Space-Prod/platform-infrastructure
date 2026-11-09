@@ -654,7 +654,7 @@ GitHub auto-merge means “merge when all applicable requirements are satisfied,
 
 Read `.github/workflows/recovery.yml`, then the recovery functions in `scripts/delivery.py`.
 
-Automatic recovery listens for trusted deployment failure statuses in QA/Production. It requires the expected observer account/context and current failed bundle. A stale failure cannot authorize rolling back a different healthy release. Dev has no automatic rollback; manual recovery supports all three environments.
+Automatic recovery is based on trusted deployment failure statuses in QA/Production. The failure-only migration documented in OPERATIONS.md moves the initial filter into the local systemd dispatcher, which sends `recovery-requested` only after observing an actual trusted failure. The consumer PR removes the broad GitHub `status` trigger only after the producer timer is installed; until then, legacy status events remain the active path. It requires the expected observer account/context and current failed bundle. A stale failure cannot authorize rolling back a different healthy release. Dev has no automatic rollback; manual recovery supports all three environments.
 
 Recovery uses the same serialized writer helper as promotion. It verifies the stored predecessor's facts, signatures and successful deployment evidence, then proposes a rollback PR. A rollback is an auditable GitOps change, not an invisible `kubectl set image` that Argo later reverses. Production review remains applicable.
 

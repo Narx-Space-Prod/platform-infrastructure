@@ -575,6 +575,12 @@ Node exporter needs privileged host visibility, which is why monitoring has a di
 
 The public hostnames are access conveniences, not proof of authentication. Protect administrative endpoints with an explicit access policy. Alertmanager APIs can alter silences; Grafana supports administration; Prometheus exposes operational internals.
 
+## Failure-only recovery dispatch
+
+The local dispatcher and systemd timer in `local/recovery_dispatcher.py` and `local/narx-recovery-dispatch.*` move failure filtering outside Actions. After the ordered migration in OPERATIONS.md, successful deployment statuses no longer start empty Recovery runs. The producer reads Argo failures, requires the exact latest observer failure, deduplicates delivered events and sends only `recovery-requested`. GitOps revalidates it under the mutation lock before proposing rollback. No polling Actions workflow is introduced.
+
+The timer itself must be operationally checked; it is a local host dependency and does not supply off-host recovery if the laptop is unavailable. This producer addition alone does not change the GitOps trigger: install/verify it before merging the consumer migration. Historical skipped runs remain visible.
+
 ## 15. Known gaps and realistic guarantees
 
 The current code supports useful production patterns: scoped discovery, versioned charts, reviewable rules/dashboards, resource budgets, runtime probes, business queue metrics, grouped alerts and independent deployment evidence. It is not an exhaustive production observability platform.

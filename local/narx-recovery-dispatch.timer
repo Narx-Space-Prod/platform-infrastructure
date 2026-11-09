@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Narx recovery candidates without creating empty Actions runs
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+AccuracySec=10s
+Unit=narx-recovery-dispatch.service
+
+[Install]
+WantedBy=timers.target
