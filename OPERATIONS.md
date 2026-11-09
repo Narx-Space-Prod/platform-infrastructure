@@ -518,7 +518,7 @@ The local network files include reviewed Docker/API CIDRs. Inspect the actual ne
 ```bash
 docker network inspect kind --format '{{json .IPAM.Config}}'
 docker inspect narx-commerce-control-plane --format '{{json .NetworkSettings.Networks}}'
-grep -n '172\.' local/argocd-metrics.json
+grep -n '172\.' local/argocd-metrics.yaml
 grep -R -n 'cidr:' ../platform-gitops/environments ../platform-gitops/charts
 ```
 
@@ -729,8 +729,8 @@ The Argo notifications patch is data, not a standalone Kubernetes resource. Conf
 
 ```bash
 cd "$NARX_WORKSPACE/platform-infrastructure"
-"$NARX_PYTHON" local/bootstrap.py configure-observer --context kind-narx-commerce --app-id "$NARX_OBSERVER_APP_ID" --installation-id "$NARX_OBSERVER_INSTALLATION_ID" --private-key-file "$NARX_OBSERVER_KEY_FILE" --notifications-file "$NARX_WORKSPACE/platform-gitops/applications/notifications.json"
-"$NARX_PYTHON" local/bootstrap.py configure-delivery-notifications --context kind-narx-commerce --notifications-file "$NARX_WORKSPACE/platform-gitops/applications/notifications.json" --slack-webhook-file "$NARX_SLACK_FILE"
+"$NARX_PYTHON" local/bootstrap.py configure-observer --context kind-narx-commerce --app-id "$NARX_OBSERVER_APP_ID" --installation-id "$NARX_OBSERVER_INSTALLATION_ID" --private-key-file "$NARX_OBSERVER_KEY_FILE" --notifications-file "$NARX_WORKSPACE/platform-gitops/applications/notifications.yaml"
+"$NARX_PYTHON" local/bootstrap.py configure-delivery-notifications --context kind-narx-commerce --notifications-file "$NARX_WORKSPACE/platform-gitops/applications/notifications.yaml" --slack-webhook-file "$NARX_SLACK_FILE"
 kubectl --context kind-narx-commerce -n argocd rollout restart deployment/argocd-notifications-controller
 kubectl --context kind-narx-commerce -n argocd rollout status deployment/argocd-notifications-controller --timeout=180s
 ```
@@ -861,7 +861,7 @@ The current shared schema validator is pinned to Kubernetes 1.35.0 schemas while
 ### 13.2 Apply the AppProject and ApplicationSet
 
 ```bash
-kubectl --context kind-narx-commerce apply --server-side -f applications/local/commerce.json
+kubectl --context kind-narx-commerce apply --server-side -f applications/local/commerce.yaml
 kubectl --context kind-narx-commerce -n argocd get appproject narx-commerce-local
 kubectl --context kind-narx-commerce -n argocd get applicationset narx-commerce-local
 kubectl --context kind-narx-commerce -n argocd get applications -o custom-columns=NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status
@@ -1516,7 +1516,7 @@ Read `delivery.py` by responsibility:
 - `wait_for_approval`: observe the intended Production release-only PR; independently reviewed merge must contain the expected bundle.
 - `recover_stage`, `rollback`: propose a verified previous image bundle, preserving Production review and excluding automatic schema/data rollback.
 
-Read `source_gate.py` next. Note the repository/commit/run/attempt checks, artifact size/path constraints, exact v1 schema and image identities. Only missing artifact indexing gets a bounded grace period; invalid v1 evidence never falls back to job display names.
+The delivery verifier uses pinned PyYAML to compare reviewed YAML manifests with historical JSON manifests; release metadata remains JSON. Read `source_gate.py` next. Note the repository/commit/run/attempt checks, artifact size/path constraints, exact v1 schema and image identities. Only missing artifact indexing gets a bounded grace period; invalid v1 evidence never falls back to job display names.
 
 ### 18.4 Helm: application modules rather than six copied deployments
 
@@ -1526,7 +1526,13 @@ Read `source_gate.py` next. Note the repository/commit/run/attempt checks, artif
 
 ```bash
 cd "$NARX_WORKSPACE/platform-gitops"
-jq '.items[]|select(.kind=="ApplicationSet")|.spec.template.spec.source.helm.valueFiles' applications/local/commerce.json
+"$NARX_PYTHON" - <<'PYARGO'
+from pathlib import Path
+import yaml
+for resource in yaml.safe_load_all(Path('applications/local/commerce.yaml').read_text()):
+    if resource and resource.get('kind') == 'ApplicationSet':
+        print(resource['spec']['template']['spec']['source']['helm']['valueFiles'])
+PYARGO
 cat charts/commerce/Chart.yaml
 cat environments/qa/runtime.yaml
 jq '.release|{ready,id,previous}' environments/qa/release.json

@@ -1,0 +1,38 @@
+# Expose only Argo application-controller metrics through the reviewed network policy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: narx-argocd-metrics
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: narx-commerce
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: argocd-application-controller
+  ports:
+    - name: metrics
+      port: 8082
+      targetPort: 8082
+      nodePort: 32082
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: narx-argocd-metrics-ingress
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: narx-commerce
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-application-controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 172.18.0.0/16
+      ports:
+        - protocol: TCP
+          port: 8082
